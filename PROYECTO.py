@@ -4,6 +4,7 @@ import time
 import pandas as pd
 import matplotlib.pyplot as plt
 from flet.matplotlib_chart import MatplotlibChart
+from flet.plotly_chart import PlotlyChart
 import numpy as np
 from datetime import datetime
 import matplotlib
@@ -22,6 +23,8 @@ import colorsys
 import unicodedata
 from typing import Optional, Tuple, Dict, Any, List
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # Needed for 3D projections
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 # --- PDF reportlab imports ---
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import (
@@ -7710,8 +7713,6 @@ class MainApp:
             plt.style.use('dark_background' if self.is_dark_mode else 'seaborn-v0_8-whitegrid')
             plt.rcParams["font.family"] = "DejaVu Sans"
 
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
-
             # Preparar senal de tiempo segun unidad seleccionada
             try:
                 unit_mode = getattr(self, "time_unit_dd", None).value if getattr(self, "time_unit_dd", None) else "vel_mm"
@@ -7729,27 +7730,6 @@ class MainApp:
                 _y_time = acc_segment
                 _ylabel = "Aceleración [m/s²]"
                 _rms_text = f"RMS acc: {self._calculate_rms(_y_time):.3e} m/s^2"
-
-
-
-            ax1.plot(t_segment, _y_time, color=self.time_plot_color, linewidth=2)
-
-            ax1.set_title("Señal en el tiempo")
-
-            ax1.set_xlabel("Tiempo (s)")
-
-            ax1.set_ylabel(_ylabel)
-
-            # Anotar RMS de Aceleracion (tiempo)
-            try:
-                text_color = "white" if self.is_dark_mode else "black"
-                rms_acc = self._calculate_rms(acc_segment)
-                ax1.text(0.02, 0.95, _rms_text, transform=ax1.transAxes,
-                         va="top", color=text_color)
-            except Exception:
-                pass
-
-
             # Aplicar filtros visuales de frecuencia (LF y/o límite HF)
             try:
                 fc = float(self.lf_cutoff_field.value) if getattr(self, 'lf_cutoff_field', None) and getattr(self.lf_cutoff_field, 'value', '') else 0.5
@@ -7800,8 +7780,8 @@ class MainApp:
                 use_dbv = False
 
             xplot_disp = np.asarray(xplot, dtype=float) / freq_scale if xplot is not None else xplot
-            ax2.plot(xplot_disp, yplot, color=self.fft_plot_color, linewidth=2)
-            ax2.fill_between(xplot_disp, yplot, alpha=0.3, color=self.fft_plot_color)
+            yplot_dbv = None
+            db_axis_min = db_axis_max = None
             if use_dbv:
                 try:
                     # Espectro de aceleración para dBV si el sensor es de acc
@@ -7836,34 +7816,21 @@ class MainApp:
                         V_amp = yplot * 0.0
                     eps = 1e-12
                     yplot_dbv = 20.0 * np.log10(np.maximum(np.asarray(V_amp, dtype=float), eps) / 1.0)
-                    ax2_db = ax2.twinx()
-                    ax2_db.plot(xplot_disp, yplot_dbv, color="#9b59b6", linewidth=1.6, linestyle="--")
-                    ax2_db.set_ylabel("Nivel [dBV]")
-                    # Aplicar rango Y si se definió
                     try:
-                        ymin = float(self.db_ymin_field.value) if getattr(self, 'db_ymin_field', None) and getattr(self.db_ymin_field, 'value', '') != '' else None
+                        db_axis_min = float(self.db_ymin_field.value) if getattr(self, 'db_ymin_field', None) and getattr(self.db_ymin_field, 'value', '') != '' else None
                     except Exception:
-                        ymin = None
+                        db_axis_min = None
                     try:
-                        ymax = float(self.db_ymax_field.value) if getattr(self, 'db_ymax_field', None) and getattr(self.db_ymax_field, 'value', '') != '' else None
+                        db_axis_max = float(self.db_ymax_field.value) if getattr(self, 'db_ymax_field', None) and getattr(self.db_ymax_field, 'value', '') != '' else None
                     except Exception:
-                        ymax = None
-                    if ymin is not None or ymax is not None:
-                        cur = ax2_db.get_ylim()
-                        ax2_db.set_ylim(ymin if ymin is not None else cur[0], ymax if ymax is not None else cur[1])
+                        db_axis_max = None
                 except Exception:
-                    pass
-
-            # Eje espejo en RPM sincronizado con el rango visible
-            try:
-                ax2_rpm = ax2.twiny()
-                xmin, xmax = ax2.get_xlim()
-                ax2_rpm.set_xlim(xmin * freq_scale * 60.0, xmax * freq_scale * 60.0)
-                ax2_rpm.set_xlabel("Frecuencia (RPM)")
-            except Exception:
-                pass
+                    yplot_dbv = None
+                    db_axis_min = db_axis_max = None
 
             # Marcar picos principales (Top-N)
+            peak_points: List[Tuple[float, float]] = []
+            peak_labels: List[str] = []
             try:
                 K = 5
                 min_freq = (max(0.5, fc) if hide_lf else 0.5)
@@ -7879,10 +7846,7 @@ class MainApp:
                         idx = idx[np.argsort(yv[idx])[::-1]]
                         peak_f = xv[idx]
                         peak_a = yv[idx]
-                        ax2.scatter(peak_f / freq_scale, peak_a, color="#e74c3c", s=30, zorder=5)
                         f1 = self._get_1x_hz(dom_freq)
-                        peak_points: List[Tuple[float, float]] = []
-                        peak_labels: List[str] = []
                         for pf, pa in zip(peak_f, peak_a):
                             try:
                                 pf_f = float(pf)
@@ -7897,12 +7861,12 @@ class MainApp:
                                     order = None
                             peak_points.append((pf_f / freq_scale, pa_f))
                             peak_labels.append(self._format_peak_label(pf_f, pa_f, order))
-                        if peak_points:
-                            self._place_annotations(ax2, peak_points, peak_labels, color="#e74c3c")
             except Exception:
-                pass
+                peak_points = []
+                peak_labels = []
 
             # Líneas guía de frecuencias teóricas (modo asistido)
+            visible_marks: List[Tuple[float, str, str]] = []
             try:
                 bpfo = self._fldf(getattr(self, 'bpfo_field', None))
                 bpfi = self._fldf(getattr(self, 'bpfi_field', None))
@@ -7914,7 +7878,6 @@ class MainApp:
                     (bsf,  'BSF',  '#2ca02c'),
                     (ftf,  'FTF',  '#9467bd'),
                 ]
-                visible_marks = []
                 for f0, label, col in marks_raw:
                     if not (f0 and f0 > 0):
                         continue
@@ -7924,27 +7887,185 @@ class MainApp:
                         continue
                     if zmin is not None and (f0_f < zmin or f0_f > zmax):
                         continue
-                    ax2.axvline(f0_f / freq_scale, color=col, linestyle='--', alpha=0.85, linewidth=1.2)
                     visible_marks.append((f0_f / freq_scale, label, col))
-                zoom_scaled = None if zmin is None else (zmin / freq_scale, zmax / freq_scale)
-                self._draw_frequency_markers(ax2, visible_marks, zoom_scaled)
             except Exception:
-                pass
+                visible_marks = []
 
-            ax2.set_title(f"FFT (Velocidad)")
-
-            ax2.set_xlabel(f"Frecuencia ({freq_unit})")
-            ax2.set_ylabel("Velocidad [mm/s]")
+            hover_precision = ".3f" if unit_mode in {"vel_mm", "acc_g"} else ".3e"
             try:
-                if zmin is not None:
-                    ax2.set_xlim(left=zmin / freq_scale, right=zmax / freq_scale)
-                elif fmax_ui and fmax_ui > 0:
-                    ax2.set_xlim(left=0.0, right=float(fmax_ui) / freq_scale)
-            except Exception:
-                pass
+                fig_time_title = "Señal en el tiempo"
+                fig_freq_title = "FFT (Velocidad)"
+                template_name = "plotly_dark" if self.is_dark_mode else "plotly_white"
+                plotly_fig = make_subplots(
+                    rows=2,
+                    cols=1,
+                    shared_x=False,
+                    vertical_spacing=0.08,
+                    specs=[[{}], [{"secondary_y": True}]],
+                )
 
-            chart = MatplotlibChart(fig, expand=True, isolated=True)
-            plt.close(fig)
+                time_hover = "Tiempo: %{x:.3f} s"
+                time_hover += f"<br>{_ylabel}: %{{y:{hover_precision}}}"
+                time_hover += "<extra></extra>"
+                plotly_fig.add_trace(
+                    go.Scatter(
+                        x=t_segment,
+                        y=_y_time,
+                        mode="lines",
+                        line=dict(color=self.time_plot_color, width=2),
+                        name=fig_time_title,
+                        hovertemplate=time_hover,
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+                annotation_color = "#ffffff" if self.is_dark_mode else "#000000"
+                plotly_fig.add_annotation(
+                    x=0.01,
+                    y=0.98,
+                    xref="paper",
+                    yref="paper",
+                    text=_rms_text,
+                    showarrow=False,
+                    align="left",
+                    font=dict(color=annotation_color, size=12),
+                    bgcolor="rgba(0,0,0,0)",
+                )
+
+                if xplot is not None and yplot is not None:
+                    fft_custom = None
+                    try:
+                        fft_custom = np.column_stack(
+                            [
+                                np.asarray(xplot, dtype=float),
+                                np.asarray(xplot, dtype=float) * 60.0,
+                            ]
+                        )
+                    except Exception:
+                        fft_custom = None
+
+                    fft_hover = f"Frecuencia ({freq_unit}): %{{x:.3f}}"
+                    if fft_custom is not None:
+                        fft_hover += "<br>Frecuencia (Hz): %{customdata[0]:.3f}"
+                    fft_hover += "<br>Velocidad: %{y:.3f} mm/s"
+                    if fft_custom is not None:
+                        fft_hover += "<br>RPM: %{customdata[1]:.0f}"
+                    fft_hover += "<extra></extra>"
+
+                    plotly_fig.add_trace(
+                        go.Scatter(
+                            x=xplot_disp,
+                            y=yplot,
+                            mode="lines",
+                            line=dict(color=self.fft_plot_color, width=2),
+                            fill="tozeroy",
+                            name=fig_freq_title,
+                            customdata=fft_custom,
+                            hovertemplate=fft_hover,
+                        ),
+                        row=2,
+                        col=1,
+                        secondary_y=False,
+                    )
+
+                if peak_points:
+                    peak_x_disp = [pt for pt, _ in peak_points]
+                    peak_y = [amp for _, amp in peak_points]
+                    plotly_fig.add_trace(
+                        go.Scatter(
+                            x=peak_x_disp,
+                            y=peak_y,
+                            mode="markers",
+                            marker=dict(color="#e74c3c", size=9),
+                            name="Picos principales",
+                            hovertext=peak_labels,
+                            hoverinfo="text",
+                        ),
+                        row=2,
+                        col=1,
+                        secondary_y=False,
+                    )
+
+                if yplot_dbv is not None:
+                    plotly_fig.add_trace(
+                        go.Scatter(
+                            x=xplot_disp,
+                            y=yplot_dbv,
+                            mode="lines",
+                            line=dict(color="#9b59b6", width=1.6, dash="dash"),
+                            name="Nivel [dBV]",
+                            hovertemplate="Frecuencia: %{x:.3f}<br>Nivel: %{y:.2f} dBV<extra></extra>",
+                        ),
+                        row=2,
+                        col=1,
+                        secondary_y=True,
+                    )
+
+                if visible_marks:
+                    try:
+                        fft_ymax = float(np.nanmax(yplot)) if yplot is not None and len(yplot) > 0 else 0.0
+                    except Exception:
+                        fft_ymax = 0.0
+                    if not np.isfinite(fft_ymax) or fft_ymax <= 0:
+                        fft_ymax = 1.0
+                    for pos, label, color_hex in visible_marks:
+                        plotly_fig.add_shape(
+                            type="line",
+                            x0=pos,
+                            x1=pos,
+                            y0=0,
+                            y1=fft_ymax,
+                            xref="x2",
+                            yref="y2",
+                            line=dict(color=color_hex, dash="dash", width=1.2, opacity=0.85),
+                        )
+                        plotly_fig.add_annotation(
+                            x=pos,
+                            y=fft_ymax,
+                            xref="x2",
+                            yref="y2",
+                            text=label,
+                            showarrow=False,
+                            font=dict(color=color_hex, size=11),
+                            yanchor="bottom",
+                        )
+
+                plotly_fig.update_xaxes(title_text="Tiempo (s)", row=1, col=1)
+                plotly_fig.update_yaxes(title_text=_ylabel, row=1, col=1)
+                plotly_fig.update_xaxes(title_text=f"Frecuencia ({freq_unit})", row=2, col=1)
+                plotly_fig.update_yaxes(title_text="Velocidad [mm/s]", row=2, col=1, secondary_y=False)
+
+                if yplot_dbv is not None:
+                    plotly_fig.update_yaxes(title_text="Nivel [dBV]", row=2, col=1, secondary_y=True)
+                    try:
+                        max_db = float(np.nanmax(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
+                        min_db = float(np.nanmin(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
+                    except Exception:
+                        max_db = 0.0
+                        min_db = 0.0
+                    lower = db_axis_min if db_axis_min is not None else min_db
+                    upper = db_axis_max if db_axis_max is not None else max_db
+                    if np.isfinite(lower) and np.isfinite(upper) and upper != lower:
+                        plotly_fig.update_yaxes(range=[lower, upper], row=2, col=1, secondary_y=True)
+
+                if zmin is not None:
+                    plotly_fig.update_xaxes(range=[zmin / freq_scale, zmax / freq_scale], row=2, col=1)
+                elif fmax_ui and fmax_ui > 0:
+                    plotly_fig.update_xaxes(range=[0.0, float(fmax_ui) / freq_scale], row=2, col=1)
+
+                plotly_fig.update_layout(
+                    template=template_name,
+                    height=650,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+                    margin=dict(l=60, r=40, t=60, b=60),
+                    hovermode="x unified",
+                    title=dict(text="Análisis tiempo / frecuencia", x=0.5),
+                )
+
+                chart = PlotlyChart(plotly_fig, expand=True)
+            except Exception:
+                chart = None
 
             # Gráfica separada de Envolvente con picos
             env_chart = None
@@ -8466,7 +8587,8 @@ class MainApp:
             )
 
             column_controls.append(ft.Text(_fft_filter_note, text_align=ft.TextAlign.LEFT))
-            column_controls.append(chart)
+            if chart is not None:
+                column_controls.append(chart)
 
             if runup_chart:
                 column_controls.append(runup_chart)
