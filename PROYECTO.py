@@ -8004,7 +8004,6 @@ class MainApp:
                 plotly_fig = make_subplots(
                     rows=2,
                     cols=1,
-                    shared_x=False,
                     vertical_spacing=0.08,
                     specs=[[{}], [{"secondary_y": True}]],
                 )
