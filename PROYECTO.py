@@ -6079,7 +6079,82 @@ class MainApp:
         except Exception:
             pass
 
-    def _generate_runup_3d_figure(
+    def _build_plotly_envelope_chart(
+        self,
+        freq_values: np.ndarray,
+        amplitudes: np.ndarray,
+        freq_unit: str,
+        peaks: Optional[List[Dict[str, float]]] = None,
+        visible_marks: Optional[List[Tuple[float, str, str]]] = None,
+        dark_mode: bool = False,
+        zoom_range: Optional[Tuple[float, float]] = None,
+    ) -> Optional[go.Figure]:
+        try:
+            freq = np.asarray(freq_values, dtype=float)
+            amp = np.asarray(amplitudes, dtype=float)
+            if freq.size == 0 or amp.size == 0 or freq.size != amp.size:
+                return None
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=freq,
+                    y=amp,
+                    mode="lines",
+                    line=dict(color="#e67e22", width=2),
+                    fill="tozeroy",
+                    name="Espectro de Envolvente",
+                    hovertemplate=f"Frecuencia: %{{x:.3f}} {freq_unit}<br>Amp: %{{y:.3f}}<extra></extra>",
+                )
+            )
+            if peaks:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[p["x"] for p in peaks],
+                        y=[p["y"] for p in peaks],
+                        mode="markers",
+                        marker=dict(color="#c0392b", size=10),
+                        name="Picos",
+                        hovertemplate="Frecuencia: %{x:.3f} "
+                        + freq_unit
+                        + "<br>Amp: %{y:.3f}<extra></extra>",
+                    )
+                )
+            ymax = float(np.nanmax(amp)) if amp.size else 0.0
+            if not np.isfinite(ymax) or ymax <= 0:
+                ymax = 1.0
+            for pos, label, color_hex in visible_marks or []:
+                fig.add_shape(
+                    type="line",
+                    x0=pos,
+                    x1=pos,
+                    y0=0.0,
+                    y1=ymax,
+                    line=dict(color=color_hex, dash="dash", width=1.2, opacity=0.85),
+                )
+                fig.add_annotation(
+                    x=pos,
+                    y=ymax,
+                    text=label,
+                    showarrow=False,
+                    font=dict(color=color_hex, size=11),
+                    yanchor="bottom",
+                )
+            fig.update_layout(
+                template="plotly_dark" if dark_mode else "plotly_white",
+                title="Espectro de Envolvente",
+                height=320,
+                margin=dict(l=60, r=40, t=60, b=60),
+                xaxis=dict(title=f"Frecuencia ({freq_unit})"),
+                yaxis=dict(title="Amp [a.u.]"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            )
+            if zoom_range and zoom_range[1] > zoom_range[0]:
+                fig.update_xaxes(range=list(zoom_range))
+            return fig
+        except Exception:
+            return None
+
+    def _compute_runup_surface_data(
         self,
         t_segment: np.ndarray,
         signal_segment: np.ndarray,
@@ -6087,11 +6162,10 @@ class MainApp:
         hide_lf: bool,
         fmax_ui: Optional[float],
         zoom_range: Optional[Tuple[float, float]],
-        dark_mode: bool,
         fallback_time: Optional[np.ndarray] = None,
         fallback_signal: Optional[np.ndarray] = None,
         window_type: Optional[str] = None,
-    ):
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, str]]:
         try:
             primary_t = np.asarray(t_segment, dtype=float).ravel()
             primary_y = np.asarray(signal_segment, dtype=float).ravel()
@@ -6184,6 +6258,17 @@ class MainApp:
                 freq_scale = 1.0
             freq_unit = getattr(self, "_fft_display_unit", "Hz") or "Hz"
             freq_sel_disp = freq_sel / freq_scale
+            return times_arr, freq_sel_disp, amp, freq_unit
+        except Exception:
+            return None
+
+    def _render_runup_surface_matplotlib(
+        self,
+        surface_data: Tuple[np.ndarray, np.ndarray, np.ndarray, str],
+        dark_mode: bool,
+    ) -> Optional[plt.Figure]:
+        try:
+            times_arr, freq_sel_disp, amp, freq_unit = surface_data
             fig = plt.figure(figsize=(10, 6))
             face = "#0f141b" if dark_mode else "white"
             fig.patch.set_facecolor(face)
@@ -6218,18 +6303,86 @@ class MainApp:
         except Exception:
             return None
 
-    def _generate_orbit_figure(
+    def _build_plotly_runup_chart(
+        self,
+        surface_data: Tuple[np.ndarray, np.ndarray, np.ndarray, str],
+        dark_mode: bool,
+    ) -> Optional[go.Figure]:
+        try:
+            times_arr, freq_sel_disp, amp, freq_unit = surface_data
+            if times_arr.size == 0 or freq_sel_disp.size == 0 or amp.size == 0:
+                return None
+            T, F = np.meshgrid(times_arr, freq_sel_disp)
+            fig = go.Figure(
+                data=[
+                    go.Surface(
+                        x=T,
+                        y=F,
+                        z=amp,
+                        colorscale="Viridis",
+                        colorbar=dict(title="Velocidad [mm/s]"),
+                        hovertemplate=(
+                            "Tiempo: %{x:.3f} s" "<br>Frecuencia: %{y:.3f} " + freq_unit + "<br>Velocidad: %{z:.3f} mm/s<extra></extra>"
+                        ),
+                    )
+                ]
+            )
+            scene = dict(
+                xaxis=dict(title="Tiempo (s)"),
+                yaxis=dict(title=f"Frecuencia ({freq_unit})"),
+                zaxis=dict(title="Velocidad [mm/s]"),
+                aspectmode="auto",
+            )
+            fig.update_layout(
+                template="plotly_dark" if dark_mode else "plotly_white",
+                title="Arranque/Paro - Cascada 3D",
+                margin=dict(l=0, r=0, t=60, b=0),
+                scene=scene,
+            )
+            return fig
+        except Exception:
+            return None
+
+    def _generate_runup_3d_figure(
+        self,
+        t_segment: np.ndarray,
+        signal_segment: np.ndarray,
+        fc: float,
+        hide_lf: bool,
+        fmax_ui: Optional[float],
+        zoom_range: Optional[Tuple[float, float]],
+        dark_mode: bool,
+        fallback_time: Optional[np.ndarray] = None,
+        fallback_signal: Optional[np.ndarray] = None,
+        window_type: Optional[str] = None,
+    ):
+        try:
+            surface = self._compute_runup_surface_data(
+                t_segment,
+                signal_segment,
+                fc,
+                hide_lf,
+                fmax_ui,
+                zoom_range,
+                fallback_time,
+                fallback_signal,
+                window_type,
+            )
+            if surface is None:
+                return None
+            return self._render_runup_surface_matplotlib(surface, dark_mode)
+        except Exception:
+            return None
+
+    def _prepare_orbit_plot_data(
         self,
         t_segment: np.ndarray,
         x_segment: np.ndarray,
         y_segment: np.ndarray,
-        x_label: str,
-        y_label: str,
         fc: float,
         hide_lf: bool,
         fmax_ui: Optional[float],
-        dark_mode: bool,
-    ):
+    ) -> Optional[Dict[str, Any]]:
         try:
             t = np.asarray(t_segment, dtype=float).ravel()
             x = np.asarray(x_segment, dtype=float).ravel()
@@ -6333,22 +6486,91 @@ class MainApp:
                 y_plot = balanced[1]
                 overlay_original = True
                 balance_note = "Órbita auto-equilibrada (señales muy correlacionadas)"
+            progress = np.linspace(0.0, 1.0, x_plot.size, dtype=float)
+            radial = np.hypot(x_plot, y_plot)
+            if radial.size == 0:
+                return None
+            try:
+                span = float(np.nanpercentile(np.concatenate((np.abs(x_plot), np.abs(y_plot))), 99.5))
+            except Exception:
+                span = float(np.nanmax(radial)) if radial.size else 0.0
+            if not np.isfinite(span) or span <= 0:
+                span = float(np.nanmax(radial)) if radial.size else 1.0
+            lim = float(span) * 1.1 if span > 0 else 1.0
+            peak_points: List[Dict[str, float]] = []
+            if radial.size >= 16:
+                top_n = min(3, radial.size)
+                peak_idx = np.argpartition(radial, -top_n)[-top_n:]
+                peak_idx = peak_idx[np.argsort(radial[peak_idx])[::-1]]
+                for idx in peak_idx:
+                    value = float(radial_source[idx]) if idx < radial_source.size else float(radial[idx])
+                    peak_points.append(
+                        {
+                            "x": float(x_plot[idx]),
+                            "y": float(y_plot[idx]),
+                            "value": value,
+                        }
+                    )
+            start_point = (
+                (float(x_plot[0]), float(y_plot[0]))
+                if x_plot.size
+                else None
+            )
+            end_point = (
+                (float(x_plot[-1]), float(y_plot[-1]))
+                if x_plot.size
+                else None
+            )
+            info_lines: List[str] = []
+            if corr_val is not None and np.isfinite(corr_val):
+                info_lines.append(f"ρ(X,Y) = {corr_val:.3f}")
+            if std_x is not None and std_y is not None and std_y > 0:
+                info_lines.append(f"σx/σy = {(std_x / std_y):.2f}")
+            if eig_ratio is not None and np.isfinite(eig_ratio):
+                info_lines.append(f"κ = {eig_ratio:.1f}")
+            return {
+                "x_plot": x_plot,
+                "y_plot": y_plot,
+                "x_original": x_filt,
+                "y_original": y_filt,
+                "overlay_original": overlay_original,
+                "balance_note": balance_note,
+                "progress": progress,
+                "lim": lim,
+                "peak_points": peak_points,
+                "start_point": start_point,
+                "end_point": end_point,
+                "info_lines": info_lines,
+            }
+        except Exception:
+            return None
+
+    def _render_orbit_matplotlib(
+        self,
+        data: Dict[str, Any],
+        x_label: str,
+        y_label: str,
+        dark_mode: bool,
+    ) -> Optional[plt.Figure]:
+        try:
+            x_plot = data["x_plot"]
+            y_plot = data["y_plot"]
             face = "#0f141b" if dark_mode else "white"
             fig, ax = plt.subplots(figsize=(6, 6))
             fig.patch.set_facecolor(face)
             ax.set_facecolor(face)
             accent = self._accent_ui()
-            if overlay_original:
+            if data.get("overlay_original"):
                 ax.plot(
-                    x_filt,
-                    y_filt,
+                    data["x_original"],
+                    data["y_original"],
                     color="#95a5a6",
                     linewidth=0.9,
                     alpha=0.5,
                     label="Original (sin balance)",
                 )
             ax.plot(x_plot, y_plot, color=accent, linewidth=1.4, alpha=0.9)
-            progress = np.linspace(0.0, 1.0, x_plot.size, dtype=float)
+            progress = data["progress"]
             sc = ax.scatter(
                 x_plot,
                 y_plot,
@@ -6358,24 +6580,14 @@ class MainApp:
                 alpha=0.6,
                 linewidths=0,
             )
-            radial = np.hypot(x_plot, y_plot)
-            try:
-                span = float(np.nanpercentile(np.concatenate((np.abs(x_plot), np.abs(y_plot))), 99.5))
-            except Exception:
-                span = float(np.nanmax(radial)) if radial.size else 0.0
-            if not np.isfinite(span) or span <= 0:
-                span = float(np.nanmax(radial)) if radial.size else 1.0
-            lim = float(span) * 1.1 if span > 0 else 1.0
+            lim = float(data["lim"])
             ax.set_xlim(-lim, lim)
             ax.set_ylim(-lim, lim)
-            peak_idx = np.array([], dtype=int)
-            if radial.size >= 16:
-                top_n = min(3, radial.size)
-                peak_idx = np.argpartition(radial, -top_n)[-top_n:]
-                peak_idx = peak_idx[np.argsort(radial[peak_idx])[::-1]]
+            peak_points = data["peak_points"]
+            if peak_points:
                 ax.scatter(
-                    x_plot[peak_idx],
-                    y_plot[peak_idx],
+                    [p["x"] for p in peak_points],
+                    [p["y"] for p in peak_points],
                     color="#f9ca24",
                     edgecolors="#2c3e50",
                     linewidths=0.6,
@@ -6384,9 +6596,13 @@ class MainApp:
                     label="Picos máximos",
                     zorder=6,
                 )
+            start_point = data.get("start_point")
+            end_point = data.get("end_point")
             try:
-                ax.scatter([x_plot[0]], [y_plot[0]], color="#2ecc71", s=50, label="Inicio")
-                ax.scatter([x_plot[-1]], [y_plot[-1]], color="#e74c3c", s=50, label="Fin")
+                if start_point:
+                    ax.scatter([start_point[0]], [start_point[1]], color="#2ecc71", s=50, label="Inicio")
+                if end_point:
+                    ax.scatter([end_point[0]], [end_point[1]], color="#e74c3c", s=50, label="Fin")
             except Exception:
                 pass
             ax.set_title("Análisis de órbita")
@@ -6396,18 +6612,19 @@ class MainApp:
             axis_color = "white" if dark_mode else "black"
             ax.axhline(0.0, color=axis_color, linewidth=0.8, alpha=0.2)
             ax.axvline(0.0, color=axis_color, linewidth=0.8, alpha=0.2)
-            if peak_idx.size:
-                for idx_peak in peak_idx:
-                    raw_val = float(radial_source[idx_peak]) if idx_peak < radial_source.size else float(radial[idx_peak])
+            for entry in peak_points:
+                try:
                     ax.text(
-                        x_plot[idx_peak],
-                        y_plot[idx_peak],
-                        f"{raw_val:.2f}",
+                        entry["x"],
+                        entry["y"],
+                        f"{entry['value']:.2f}",
                         color=axis_color,
                         fontsize=8,
                         ha="left",
                         va="bottom",
                     )
+                except Exception:
+                    continue
             grid_color = "#34495e" if dark_mode else "#bdc3c7"
             ax.grid(True, linestyle="--", alpha=0.25 if dark_mode else 0.35, color=grid_color)
             ax.xaxis.label.set_color(axis_color)
@@ -6416,13 +6633,7 @@ class MainApp:
             for axis in [ax.xaxis, ax.yaxis]:
                 for tick in axis.get_ticklabels():
                     tick.set_color(axis_color)
-            info_lines = []
-            if corr_val is not None and np.isfinite(corr_val):
-                info_lines.append(f"ρ(X,Y) = {corr_val:.3f}")
-            if std_x is not None and std_y is not None and std_y > 0:
-                info_lines.append(f"σx/σy = {(std_x / std_y):.2f}")
-            if eig_ratio is not None and np.isfinite(eig_ratio):
-                info_lines.append(f"κ = {eig_ratio:.1f}")
+            info_lines = data.get("info_lines", [])
             if info_lines:
                 ax.text(
                     0.02,
@@ -6433,6 +6644,7 @@ class MainApp:
                     color=axis_color,
                     va="top",
                 )
+            balance_note = data.get("balance_note")
             if balance_note:
                 ax.text(
                     0.02,
@@ -6462,6 +6674,163 @@ class MainApp:
                 warnings.simplefilter("ignore", UserWarning)
                 fig.tight_layout()
             return fig
+        except Exception:
+            return None
+
+    def _build_plotly_orbit_chart(
+        self,
+        data: Dict[str, Any],
+        x_label: str,
+        y_label: str,
+        dark_mode: bool,
+    ) -> Optional[go.Figure]:
+        try:
+            x_plot = np.asarray(data["x_plot"], dtype=float)
+            y_plot = np.asarray(data["y_plot"], dtype=float)
+            if x_plot.size == 0 or y_plot.size == 0:
+                return None
+            fig = go.Figure()
+            if data.get("overlay_original"):
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.asarray(data["x_original"], dtype=float),
+                        y=np.asarray(data["y_original"], dtype=float),
+                        mode="lines",
+                        line=dict(color="#95a5a6", width=1, dash="dot"),
+                        opacity=0.55,
+                        name="Original (sin balance)",
+                        hovertemplate="X: %{x:.3f}<br>Y: %{y:.3f}<extra></extra>",
+                    )
+                )
+            accent = self._accent_ui()
+            progress = np.asarray(data["progress"], dtype=float)
+            fig.add_trace(
+                go.Scatter(
+                    x=x_plot,
+                    y=y_plot,
+                    mode="lines+markers",
+                    line=dict(color=accent, width=1.4),
+                    marker=dict(
+                        size=6,
+                        color=progress,
+                        colorscale="Plasma",
+                        colorbar=dict(title="Progreso"),
+                        showscale=True,
+                    ),
+                    name="Órbita",
+                    hovertemplate="X: %{x:.3f}<br>Y: %{y:.3f}<br>Progreso: %{marker.color:.2f}<extra></extra>",
+                )
+            )
+            peak_points = data.get("peak_points", [])
+            if peak_points:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[p["x"] for p in peak_points],
+                        y=[p["y"] for p in peak_points],
+                        mode="markers",
+                        marker=dict(
+                            symbol="star",
+                            size=14,
+                            color="#f9ca24",
+                            line=dict(color="#2c3e50", width=1),
+                        ),
+                        name="Picos máximos",
+                        hovertemplate="X: %{x:.3f}<br>Y: %{y:.3f}<br>Radio: %{customdata:.2f}<extra></extra>",
+                        customdata=[[p["value"]] for p in peak_points],
+                    )
+                )
+            start_point = data.get("start_point")
+            if start_point:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[start_point[0]],
+                        y=[start_point[1]],
+                        mode="markers",
+                        marker=dict(color="#2ecc71", size=11, symbol="circle"),
+                        name="Inicio",
+                        hovertemplate="Inicio<br>X: %{x:.3f}<br>Y: %{y:.3f}<extra></extra>",
+                    )
+                )
+            end_point = data.get("end_point")
+            if end_point:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[end_point[0]],
+                        y=[end_point[1]],
+                        mode="markers",
+                        marker=dict(color="#e74c3c", size=11, symbol="circle"),
+                        name="Fin",
+                        hovertemplate="Fin<br>X: %{x:.3f}<br>Y: %{y:.3f}<extra></extra>",
+                    )
+                )
+            lim = float(data["lim"])
+            axis_kwargs = dict(zeroline=True, zerolinecolor="#7f8c8d", zerolinewidth=1)
+            fig.update_layout(
+                template="plotly_dark" if dark_mode else "plotly_white",
+                title="Análisis de órbita",
+                xaxis=dict(title=x_label or "Canal X", range=[-lim, lim], scaleanchor="y", **axis_kwargs),
+                yaxis=dict(title=y_label or "Canal Y", range=[-lim, lim], scaleratio=1, **axis_kwargs),
+                hovermode="closest",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                margin=dict(l=60, r=40, t=60, b=80),
+            )
+            fig.update_yaxes(scaleanchor="x", scaleratio=1)
+            info_lines = data.get("info_lines", [])
+            if info_lines:
+                fig.add_annotation(
+                    xref="paper",
+                    yref="paper",
+                    x=0.01,
+                    y=0.99,
+                    text="<br>".join(info_lines),
+                    showarrow=False,
+                    align="left",
+                    font=dict(size=11),
+                    bgcolor="rgba(0,0,0,0.25)" if dark_mode else "rgba(255,255,255,0.6)",
+                    bordercolor="rgba(0,0,0,0)",
+                )
+            balance_note = data.get("balance_note")
+            if balance_note:
+                fig.add_annotation(
+                    xref="paper",
+                    yref="paper",
+                    x=0.01,
+                    y=0.01,
+                    text=balance_note,
+                    showarrow=False,
+                    align="left",
+                    font=dict(size=11),
+                    bgcolor="rgba(27,38,51,0.55)" if dark_mode else "rgba(255,255,255,0.7)",
+                    bordercolor="rgba(0,0,0,0)",
+                )
+            return fig
+        except Exception:
+            return None
+
+    def _generate_orbit_figure(
+        self,
+        t_segment: np.ndarray,
+        x_segment: np.ndarray,
+        y_segment: np.ndarray,
+        x_label: str,
+        y_label: str,
+        fc: float,
+        hide_lf: bool,
+        fmax_ui: Optional[float],
+        dark_mode: bool,
+    ):
+        try:
+            data = self._prepare_orbit_plot_data(
+                t_segment,
+                x_segment,
+                y_segment,
+                fc,
+                hide_lf,
+                fmax_ui,
+            )
+            if data is None:
+                return None
+            return self._render_orbit_matplotlib(data, x_label, y_label, dark_mode)
         except Exception:
             return None
 
@@ -8184,6 +8553,7 @@ class MainApp:
 
             # Gráfica separada de Envolvente con picos
             env_chart = None
+            env_plotly_error: Optional[Exception] = None
             try:
                 xf_env = res.get('envelope', {}).get('f_hz', None)
                 env_amp = res.get('envelope', {}).get('amp', None)
@@ -8199,13 +8569,10 @@ class MainApp:
                         m_env = m_env & (xf_env >= zmin) & (xf_env <= zmax)
                     xenv = xf_env[m_env]
                     yenv = env_amp[m_env]
-                    env_fig, env_ax = plt.subplots(figsize=(14, 3))
                     xenv_disp = np.asarray(xenv, dtype=float) / freq_scale
-                    env_ax.plot(xenv_disp, yenv, color="#e67e22", linewidth=1.6)
-                    env_ax.set_title("Espectro de Envolvente")
-                    env_ax.set_xlabel(f"Frecuencia ({freq_unit})")
-                    env_ax.set_ylabel("Amp [a.u.]")
-                    # Picos anotados
+                    peak_points_mt: List[Tuple[float, float]] = []
+                    peak_labels: List[str] = []
+                    peak_entries: List[Dict[str, float]] = []
                     try:
                         vis_peaks = []
                         for p in (peaks_env or []):
@@ -8226,15 +8593,14 @@ class MainApp:
                                 tmp = [(f0, a0) for f0, a0 in vis_peaks if zmin <= f0 <= zmax]
                                 if tmp:
                                     filtered = tmp
-                            pfx, pfy = zip(*filtered)
-                            pfx_disp = [float(f0) / freq_scale for f0 in pfx]
-                            env_ax.scatter(pfx_disp, pfy, color="#c0392b", s=24, zorder=5)
-                            peak_points = [(float(f0) / freq_scale, float(a0)) for f0, a0 in filtered]
-                            peak_labels = [f"{float(f0) / freq_scale:.2f} {freq_unit}" for f0, _ in filtered]
-                            self._place_annotations(env_ax, peak_points, peak_labels, color="#c0392b", text_color="#c0392b")
+                            for f0, a0 in filtered:
+                                f_disp = float(f0) / freq_scale
+                                peak_points_mt.append((f_disp, float(a0)))
+                                peak_labels.append(f"{f_disp:.2f} {freq_unit}")
+                                peak_entries.append({"x": f_disp, "y": float(a0)})
                     except Exception:
-                        pass
-                    # Líneas guía teóricas
+                        peak_entries = []
+                    visible_marks: List[Tuple[float, str, str]] = []
                     try:
                         bpfo = self._fldf(getattr(self, 'bpfo_field', None))
                         bpfi = self._fldf(getattr(self, 'bpfi_field', None))
@@ -8246,7 +8612,6 @@ class MainApp:
                             (bsf,  'BSF',  '#2ca02c'),
                             (ftf,  'FTF',  '#9467bd'),
                         ]
-                        visible_marks = []
                         for f0, label, col in marks_raw:
                             if not (f0 and f0 > 0):
                                 continue
@@ -8256,21 +8621,53 @@ class MainApp:
                                 continue
                             if zmin is not None and (f0_f < zmin or f0_f > zmax):
                                 continue
-                            try:
-                                env_ax.axvline(f0_f / freq_scale, color=col, linestyle='--', alpha=0.85, linewidth=1.2)
-                            except Exception:
-                                pass
                             visible_marks.append((f0_f / freq_scale, label, col))
-                        zoom_scaled_env = None if zmin is None else (zmin / freq_scale, zmax / freq_scale)
-                        self._draw_frequency_markers(env_ax, visible_marks, zoom_scaled_env)
                     except Exception:
-                        pass
-                    env_chart = MatplotlibChart(env_fig, expand=True, isolated=True)
-                    plt.close(env_fig)
+                        visible_marks = []
+                    zoom_scaled_env = None if zmin is None else (zmin / freq_scale, zmax / freq_scale)
+                    try:
+                        plotly_env = self._build_plotly_envelope_chart(
+                            xenv_disp,
+                            yenv,
+                            freq_unit,
+                            peaks=peak_entries,
+                            visible_marks=visible_marks,
+                            dark_mode=self.is_dark_mode,
+                            zoom_range=zoom_scaled_env,
+                        )
+                        if plotly_env is not None:
+                            env_chart = PlotlyChart(plotly_env, expand=True)
+                    except Exception as exc:
+                        env_plotly_error = exc
+                    if env_chart is None:
+                        env_fig, env_ax = plt.subplots(figsize=(14, 3))
+                        env_ax.plot(xenv_disp, yenv, color="#e67e22", linewidth=1.6)
+                        env_ax.set_title("Espectro de Envolvente")
+                        env_ax.set_xlabel(f"Frecuencia ({freq_unit})")
+                        env_ax.set_ylabel("Amp [a.u.]")
+                        if peak_points_mt:
+                            env_ax.scatter([p for p, _ in peak_points_mt], [a for _, a in peak_points_mt], color="#c0392b", s=24, zorder=5)
+                            self._place_annotations(env_ax, peak_points_mt, peak_labels, color="#c0392b", text_color="#c0392b")
+                        if visible_marks:
+                            for pos, label, color_hex in visible_marks:
+                                try:
+                                    env_ax.axvline(pos, color=color_hex, linestyle='--', alpha=0.85, linewidth=1.2)
+                                except Exception:
+                                    continue
+                            self._draw_frequency_markers(env_ax, visible_marks, zoom_scaled_env)
+                        env_chart = MatplotlibChart(env_fig, expand=True, isolated=True)
+                        plt.close(env_fig)
             except Exception:
                 env_chart = None
+                env_plotly_error = None
+            if env_chart is None and env_plotly_error is not None:
+                try:
+                    print(f"[WARN] Envelope plot fallback due to error: {env_plotly_error}")
+                except Exception:
+                    pass
 
             orbit_chart = None
+            orbit_plotly_error: Optional[Exception] = None
             try:
                 orbit_enabled = False
                 if getattr(self, 'orbit_cb', None):
@@ -8288,24 +8685,47 @@ class MainApp:
                             x_seg = self.current_df[x_col].to_numpy()
                             y_seg = self.current_df[y_col].to_numpy()
                         t_orbit, x_orbit, y_orbit = self._trim_orbit_window(t_segment, x_seg, y_seg)
-                        orbit_fig = self._generate_orbit_figure(
+                        orbit_data = self._prepare_orbit_plot_data(
                             t_orbit,
                             x_orbit,
                             y_orbit,
-                            x_col,
-                            y_col,
                             fc,
                             hide_lf,
                             fmax_ui,
-                            self.is_dark_mode,
                         )
-                        if orbit_fig is not None:
-                            orbit_chart = MatplotlibChart(orbit_fig, expand=True, isolated=True)
-                            plt.close(orbit_fig)
+                        if orbit_data is not None:
+                            try:
+                                orbit_plotly = self._build_plotly_orbit_chart(
+                                    orbit_data,
+                                    x_col,
+                                    y_col,
+                                    self.is_dark_mode,
+                                )
+                                if orbit_plotly is not None:
+                                    orbit_chart = PlotlyChart(orbit_plotly, expand=True)
+                            except Exception as exc:
+                                orbit_plotly_error = exc
+                            if orbit_chart is None:
+                                orbit_fig = self._render_orbit_matplotlib(
+                                    orbit_data,
+                                    x_col,
+                                    y_col,
+                                    self.is_dark_mode,
+                                )
+                                if orbit_fig is not None:
+                                    orbit_chart = MatplotlibChart(orbit_fig, expand=True, isolated=True)
+                                    plt.close(orbit_fig)
             except Exception:
                 orbit_chart = None
+                orbit_plotly_error = None
+            if orbit_chart is None and orbit_plotly_error is not None:
+                try:
+                    print(f"[WARN] Orbit plot fallback due to error: {orbit_plotly_error}")
+                except Exception:
+                    pass
 
             runup_chart = None
+            runup_plotly_error: Optional[Exception] = None
             try:
                 if getattr(self, 'runup_3d_cb', None) and getattr(self.runup_3d_cb, 'value', False):
                     zoom_tuple = (zmin, zmax) if zmin is not None else None
@@ -8329,23 +8749,37 @@ class MainApp:
                     else:
                         runup_t = base_t
                         runup_acc = base_acc
-                    runup_fig = self._generate_runup_3d_figure(
+                    surface = self._compute_runup_surface_data(
                         runup_t,
                         runup_acc,
                         fc,
                         hide_lf,
                         fmax_ui,
                         zoom_tuple,
-                        self.is_dark_mode,
                         base_t,
                         base_acc,
                         self.fft_window_type,
                     )
-                    if runup_fig is not None:
-                        runup_chart = MatplotlibChart(runup_fig, expand=True, isolated=True)
-                        plt.close(runup_fig)
+                    if surface is not None:
+                        try:
+                            runup_plotly = self._build_plotly_runup_chart(surface, self.is_dark_mode)
+                            if runup_plotly is not None:
+                                runup_chart = PlotlyChart(runup_plotly, expand=True)
+                        except Exception as exc:
+                            runup_plotly_error = exc
+                        if runup_chart is None:
+                            runup_fig = self._render_runup_surface_matplotlib(surface, self.is_dark_mode)
+                            if runup_fig is not None:
+                                runup_chart = MatplotlibChart(runup_fig, expand=True, isolated=True)
+                                plt.close(runup_fig)
             except Exception:
                 runup_chart = None
+                runup_plotly_error = None
+            if runup_chart is None and runup_plotly_error is not None:
+                try:
+                    print(f"[WARN] Runup plot fallback due to error: {runup_plotly_error}")
+                except Exception:
+                    pass
 
 
             # --- Gráficas auxiliares ---
