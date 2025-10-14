@@ -6088,7 +6088,7 @@ class MainApp:
         height: Optional[int] = None,
         expand: bool = True,
     ) -> Tuple[Optional[ft.Control], Optional[Exception]]:
-        """Intenta renderizar una figura de Plotly y cae a WebView si Kaleido falla."""
+        """Intenta renderizar una figura de Plotly y ofrece caídas progresivas."""
 
         original_error: Optional[Exception] = None
         try:
@@ -6096,13 +6096,21 @@ class MainApp:
         except Exception as exc:
             original_error = exc
 
+        html_error: Optional[Exception] = None
         try:
             html = pio.to_html(figure, include_plotlyjs="cdn", full_html=False)
+            html_control = ft.Html(content=html, expand=expand, height=height)
+            return html_control, original_error
+        except Exception as exc:
+            html_error = exc
+
+        try:
+            html = pio.to_html(figure, include_plotlyjs="cdn", full_html=True)
             data_url = "data:text/html;base64," + base64.b64encode(html.encode("utf-8")).decode("ascii")
             webview = ft.WebView(url=data_url, expand=expand, height=height)
-            return webview, original_error
-        except Exception as html_exc:
-            return None, html_exc
+            return webview, original_error or html_error
+        except Exception as webview_exc:
+            return None, webview_exc
 
     def _build_plotly_envelope_chart(
         self,
@@ -8579,9 +8587,18 @@ class MainApp:
                         pass
             elif plotly_render_error is not None:
                 try:
-                    print(
-                        f"[WARN] Plotly chart renderizado vía WebView por error de Kaleido: {plotly_render_error}"
-                    )
+                    if isinstance(chart, ft.Html):
+                        print(
+                            f"[WARN] Plotly chart renderizado vía HTML por error de Kaleido: {plotly_render_error}"
+                        )
+                    elif isinstance(chart, ft.WebView):
+                        print(
+                            f"[WARN] Plotly chart renderizado vía WebView por error de Kaleido: {plotly_render_error}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Plotly chart renderizado con fallback por error de Kaleido: {plotly_render_error}"
+                        )
                 except Exception:
                     pass
 
@@ -8708,9 +8725,18 @@ class MainApp:
                         pass
             elif env_render_error is not None:
                 try:
-                    print(
-                        f"[WARN] Envelope plot renderizado vía WebView por error de Kaleido: {env_render_error}"
-                    )
+                    if isinstance(env_chart, ft.Html):
+                        print(
+                            f"[WARN] Envelope plot renderizado vía HTML por error de Kaleido: {env_render_error}"
+                        )
+                    elif isinstance(env_chart, ft.WebView):
+                        print(
+                            f"[WARN] Envelope plot renderizado vía WebView por error de Kaleido: {env_render_error}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Envelope plot renderizado con fallback por error de Kaleido: {env_render_error}"
+                        )
                 except Exception:
                     pass
 
@@ -8780,9 +8806,18 @@ class MainApp:
                         pass
             elif orbit_render_error is not None:
                 try:
-                    print(
-                        f"[WARN] Orbit plot renderizado vía WebView por error de Kaleido: {orbit_render_error}"
-                    )
+                    if isinstance(orbit_chart, ft.Html):
+                        print(
+                            f"[WARN] Orbit plot renderizado vía HTML por error de Kaleido: {orbit_render_error}"
+                        )
+                    elif isinstance(orbit_chart, ft.WebView):
+                        print(
+                            f"[WARN] Orbit plot renderizado vía WebView por error de Kaleido: {orbit_render_error}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Orbit plot renderizado con fallback por error de Kaleido: {orbit_render_error}"
+                        )
                 except Exception:
                     pass
 
@@ -8851,9 +8886,18 @@ class MainApp:
                         pass
             elif runup_render_error is not None:
                 try:
-                    print(
-                        f"[WARN] Runup plot renderizado vía WebView por error de Kaleido: {runup_render_error}"
-                    )
+                    if isinstance(runup_chart, ft.Html):
+                        print(
+                            f"[WARN] Runup plot renderizado vía HTML por error de Kaleido: {runup_render_error}"
+                        )
+                    elif isinstance(runup_chart, ft.WebView):
+                        print(
+                            f"[WARN] Runup plot renderizado vía WebView por error de Kaleido: {runup_render_error}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Runup plot renderizado con fallback por error de Kaleido: {runup_render_error}"
+                        )
                 except Exception:
                     pass
 
