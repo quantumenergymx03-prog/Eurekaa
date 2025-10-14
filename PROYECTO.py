@@ -21,10 +21,12 @@ mpl.rcParams["axes.unicode_minus"] = False
 import os
 import colorsys
 import unicodedata
+import base64
 from typing import Optional, Tuple, Dict, Any, List
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # Needed for 3D projections
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.io as pio
 # --- PDF reportlab imports ---
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import (
@@ -6079,6 +6081,29 @@ class MainApp:
         except Exception:
             pass
 
+    def _create_plotly_control(
+        self,
+        figure: go.Figure,
+        *,
+        height: Optional[int] = None,
+        expand: bool = True,
+    ) -> Tuple[Optional[ft.Control], Optional[Exception]]:
+        """Intenta renderizar una figura de Plotly y cae a WebView si Kaleido falla."""
+
+        original_error: Optional[Exception] = None
+        try:
+            return PlotlyChart(figure, expand=expand), None
+        except Exception as exc:
+            original_error = exc
+
+        try:
+            html = pio.to_html(figure, include_plotlyjs="cdn", full_html=False)
+            data_url = "data:text/html;base64," + base64.b64encode(html.encode("utf-8")).decode("ascii")
+            webview = ft.WebView(url=data_url, expand=expand, height=height)
+            return webview, original_error
+        except Exception as html_exc:
+            return None, html_exc
+
     def _build_plotly_envelope_chart(
         self,
         freq_values: np.ndarray,
@@ -8536,24 +8561,34 @@ class MainApp:
                     title=dict(text="Análisis tiempo / frecuencia", x=0.5),
                 )
 
-                chart = PlotlyChart(plotly_fig, expand=True)
+                chart, plotly_render_error = self._create_plotly_control(plotly_fig, height=650)
             except Exception as exc:
                 plotly_error = exc
                 chart = None
+                plotly_render_error = None
 
             if chart is None:
                 chart = _build_matplotlib_time_freq_chart()
                 if chart is None:
                     chart = ft.Text("No fue posible renderizar la gráfica principal.")
-                if plotly_error is not None:
+                fallback_error = plotly_error or plotly_render_error
+                if fallback_error is not None:
                     try:
-                        print(f"[WARN] Plotly chart fallback due to error: {plotly_error}")
+                        print(f"[WARN] Plotly chart fallback debido a error: {fallback_error}")
                     except Exception:
                         pass
+            elif plotly_render_error is not None:
+                try:
+                    print(
+                        f"[WARN] Plotly chart renderizado vía WebView por error de Kaleido: {plotly_render_error}"
+                    )
+                except Exception:
+                    pass
 
             # Gráfica separada de Envolvente con picos
             env_chart = None
             env_plotly_error: Optional[Exception] = None
+            env_render_error: Optional[Exception] = None
             try:
                 xf_env = res.get('envelope', {}).get('f_hz', None)
                 env_amp = res.get('envelope', {}).get('amp', None)
@@ -8636,7 +8671,9 @@ class MainApp:
                             zoom_range=zoom_scaled_env,
                         )
                         if plotly_env is not None:
-                            env_chart = PlotlyChart(plotly_env, expand=True)
+                            env_chart, env_render_error = self._create_plotly_control(
+                                plotly_env, height=320
+                            )
                     except Exception as exc:
                         env_plotly_error = exc
                     if env_chart is None:
@@ -8660,14 +8697,26 @@ class MainApp:
             except Exception:
                 env_chart = None
                 env_plotly_error = None
-            if env_chart is None and env_plotly_error is not None:
+                env_render_error = None
+            if env_chart is None:
+                if env_plotly_error is not None or env_render_error is not None:
+                    try:
+                        print(
+                            f"[WARN] Envelope plot fallback debido a error: {env_plotly_error or env_render_error}"
+                        )
+                    except Exception:
+                        pass
+            elif env_render_error is not None:
                 try:
-                    print(f"[WARN] Envelope plot fallback due to error: {env_plotly_error}")
+                    print(
+                        f"[WARN] Envelope plot renderizado vía WebView por error de Kaleido: {env_render_error}"
+                    )
                 except Exception:
                     pass
 
             orbit_chart = None
             orbit_plotly_error: Optional[Exception] = None
+            orbit_render_error: Optional[Exception] = None
             try:
                 orbit_enabled = False
                 if getattr(self, 'orbit_cb', None):
@@ -8702,7 +8751,9 @@ class MainApp:
                                     self.is_dark_mode,
                                 )
                                 if orbit_plotly is not None:
-                                    orbit_chart = PlotlyChart(orbit_plotly, expand=True)
+                                    orbit_chart, orbit_render_error = self._create_plotly_control(
+                                        orbit_plotly
+                                    )
                             except Exception as exc:
                                 orbit_plotly_error = exc
                             if orbit_chart is None:
@@ -8718,14 +8769,26 @@ class MainApp:
             except Exception:
                 orbit_chart = None
                 orbit_plotly_error = None
-            if orbit_chart is None and orbit_plotly_error is not None:
+                orbit_render_error = None
+            if orbit_chart is None:
+                if orbit_plotly_error is not None or orbit_render_error is not None:
+                    try:
+                        print(
+                            f"[WARN] Orbit plot fallback debido a error: {orbit_plotly_error or orbit_render_error}"
+                        )
+                    except Exception:
+                        pass
+            elif orbit_render_error is not None:
                 try:
-                    print(f"[WARN] Orbit plot fallback due to error: {orbit_plotly_error}")
+                    print(
+                        f"[WARN] Orbit plot renderizado vía WebView por error de Kaleido: {orbit_render_error}"
+                    )
                 except Exception:
                     pass
 
             runup_chart = None
             runup_plotly_error: Optional[Exception] = None
+            runup_render_error: Optional[Exception] = None
             try:
                 if getattr(self, 'runup_3d_cb', None) and getattr(self.runup_3d_cb, 'value', False):
                     zoom_tuple = (zmin, zmax) if zmin is not None else None
@@ -8764,7 +8827,9 @@ class MainApp:
                         try:
                             runup_plotly = self._build_plotly_runup_chart(surface, self.is_dark_mode)
                             if runup_plotly is not None:
-                                runup_chart = PlotlyChart(runup_plotly, expand=True)
+                                runup_chart, runup_render_error = self._create_plotly_control(
+                                    runup_plotly
+                                )
                         except Exception as exc:
                             runup_plotly_error = exc
                         if runup_chart is None:
@@ -8775,9 +8840,20 @@ class MainApp:
             except Exception:
                 runup_chart = None
                 runup_plotly_error = None
-            if runup_chart is None and runup_plotly_error is not None:
+                runup_render_error = None
+            if runup_chart is None:
+                if runup_plotly_error is not None or runup_render_error is not None:
+                    try:
+                        print(
+                            f"[WARN] Runup plot fallback debido a error: {runup_plotly_error or runup_render_error}"
+                        )
+                    except Exception:
+                        pass
+            elif runup_render_error is not None:
                 try:
-                    print(f"[WARN] Runup plot fallback due to error: {runup_plotly_error}")
+                    print(
+                        f"[WARN] Runup plot renderizado vía WebView por error de Kaleido: {runup_render_error}"
+                    )
                 except Exception:
                     pass
 
