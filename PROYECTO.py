@@ -7892,9 +7892,114 @@ class MainApp:
                 visible_marks = []
 
             hover_precision = ".3f" if unit_mode in {"vel_mm", "acc_g"} else ".3e"
+
+            fig_time_title = "Señal en el tiempo"
+            fig_freq_title = "FFT (Velocidad)"
+
+            def _build_matplotlib_time_freq_chart() -> Optional[MatplotlibChart]:
+                try:
+                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7), sharex=False)
+                except Exception:
+                    return None
+
+                try:
+                    ax1.plot(t_segment, _y_time, color=self.time_plot_color, linewidth=2)
+                    ax1.set_title(fig_time_title)
+                    ax1.set_xlabel("Tiempo (s)")
+                    ax1.set_ylabel(_ylabel)
+                    try:
+                        text_color = "white" if self.is_dark_mode else "black"
+                        ax1.text(
+                            0.02,
+                            0.95,
+                            _rms_text,
+                            transform=ax1.transAxes,
+                            va="top",
+                            color=text_color,
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                try:
+                    xplot_disp_local = xplot_disp if xplot_disp is not None else []
+                    yplot_local = yplot if yplot is not None else []
+                    ax2.plot(xplot_disp_local, yplot_local, color=self.fft_plot_color, linewidth=2)
+                    ax2.fill_between(xplot_disp_local, yplot_local, alpha=0.3, color=self.fft_plot_color)
+                    ax2.set_title(fig_freq_title)
+                    ax2.set_xlabel(f"Frecuencia ({freq_unit})")
+                    ax2.set_ylabel("Velocidad [mm/s]")
+                    if yplot_dbv is not None:
+                        try:
+                            ax2_db = ax2.twinx()
+                            ax2_db.plot(xplot_disp_local, yplot_dbv, color="#9b59b6", linewidth=1.6, linestyle="--")
+                            ax2_db.set_ylabel("Nivel [dBV]")
+                            lower = db_axis_min
+                            upper = db_axis_max
+                            if lower is not None or upper is not None:
+                                try:
+                                    current_min = float(np.nanmin(yplot_dbv)) if len(yplot_dbv) > 0 else None
+                                except Exception:
+                                    current_min = None
+                                try:
+                                    current_max = float(np.nanmax(yplot_dbv)) if len(yplot_dbv) > 0 else None
+                                except Exception:
+                                    current_max = None
+                                y_lower = lower if lower is not None else current_min
+                                y_upper = upper if upper is not None else current_max
+                                if (
+                                    y_lower is not None
+                                    and y_upper is not None
+                                    and np.isfinite(y_lower)
+                                    and np.isfinite(y_upper)
+                                    and y_upper != y_lower
+                                ):
+                                    ax2_db.set_ylim(y_lower, y_upper)
+                        except Exception:
+                            pass
+                    if peak_points:
+                        try:
+                            px, py = zip(*peak_points)
+                            ax2.scatter(px, py, color="#e74c3c", s=30, zorder=5)
+                            self._place_annotations(ax2, peak_points, peak_labels, color="#e74c3c")
+                        except Exception:
+                            pass
+                    if visible_marks:
+                        try:
+                            for pos, label, color_hex in visible_marks:
+                                try:
+                                    ax2.axvline(pos, color=color_hex, linestyle="--", alpha=0.85, linewidth=1.2)
+                                except Exception:
+                                    continue
+                            zoom_scaled = None if zmin is None else (zmin / freq_scale, zmax / freq_scale)
+                            self._draw_frequency_markers(ax2, visible_marks, zoom_scaled)
+                        except Exception:
+                            pass
+                    try:
+                        if zmin is not None:
+                            ax2.set_xlim(left=zmin / freq_scale, right=zmax / freq_scale)
+                        elif fmax_ui and fmax_ui > 0:
+                            ax2.set_xlim(left=0.0, right=float(fmax_ui) / freq_scale)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", UserWarning)
+                        fig.tight_layout()
+                except Exception:
+                    pass
+
+                chart_local = MatplotlibChart(fig, expand=True, isolated=True)
+                plt.close(fig)
+                return chart_local
+
+            chart = None
+            plotly_error: Optional[Exception] = None
             try:
-                fig_time_title = "Señal en el tiempo"
-                fig_freq_title = "FFT (Velocidad)"
                 template_name = "plotly_dark" if self.is_dark_mode else "plotly_white"
                 plotly_fig = make_subplots(
                     rows=2,
@@ -8064,8 +8169,19 @@ class MainApp:
                 )
 
                 chart = PlotlyChart(plotly_fig, expand=True)
-            except Exception:
+            except Exception as exc:
+                plotly_error = exc
                 chart = None
+
+            if chart is None:
+                chart = _build_matplotlib_time_freq_chart()
+                if chart is None:
+                    chart = ft.Text("No fue posible renderizar la gráfica principal.")
+                if plotly_error is not None:
+                    try:
+                        print(f"[WARN] Plotly chart fallback due to error: {plotly_error}")
+                    except Exception:
+                        pass
 
             # Gráfica separada de Envolvente con picos
             env_chart = None
