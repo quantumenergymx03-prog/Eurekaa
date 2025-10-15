@@ -3850,6 +3850,29 @@ class MainApp:
             elements.append(table_summary)
             elements.append(Spacer(1, 16))
 
+            doc.build(elements)
+
+            if not hasattr(self, "generated_reports"):
+                self.generated_reports = []
+            self.generated_reports.append(pdf_path)
+
+            self._log(f"Reporte exportado: {pdf_path}")
+
+            try:
+                self.page.snack_bar = ft.SnackBar(
+                    content=ft.Text(f"✅ Reporte PDF generado: {pdf_name}"),
+                    action="OK",
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+            except Exception:
+                pass
+
+            try:
+                self._refresh_report_list()
+            except Exception:
+                pass
+
         except Exception as ex:
             self._log(f"Error exportando PDF: {ex}")
             try:
