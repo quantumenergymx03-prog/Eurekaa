@@ -3007,6 +3007,7 @@ class MainApp:
         self._pdf_export_running = True
         prev_style = plt.rcParams.copy()
         self._set_pdf_progress(True, "Generando reporte PDF...")
+        tmp_imgs: List[str] = []
         try:
             if self.current_df is None or getattr(self.current_df, 'empty', False):
                 self._log("No hay datos para exportar")
@@ -3235,8 +3236,6 @@ class MainApp:
                 _y_time = acc_seg
                 _ylabel = 'Aceleración [m/s²]'
                 _rms_text = f"RMS acc: {self._calculate_rms(_y_time):.3e} m/s^2"
-
-            tmp_imgs: List[str] = []
 
             fig1, ax1 = plt.subplots(figsize=(8, 3))
             if len(t_seg) > 0 and len(_y_time) > 0:
@@ -3853,11 +3852,28 @@ class MainApp:
 
         except Exception as ex:
             self._log(f"Error exportando PDF: {ex}")
+            try:
+                self.page.snack_bar = ft.SnackBar(
+                    content=ft.Text("❌ Ocurrió un error al generar el PDF"),
+                    action="OK",
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+            except Exception:
+                pass
         finally:
             try:
                 plt.rcParams.update(prev_style)
             except Exception:
                 pass
+            for img_path in tmp_imgs:
+                try:
+                    if img_path and os.path.exists(img_path):
+                        os.remove(img_path)
+                except Exception:
+                    pass
+            self._set_pdf_progress(False, None)
+            self._pdf_export_running = False
 
 
 
