@@ -1414,7 +1414,9 @@ class MainApp:
 
         self.page.window.min_height = 700
 
-
+        # Capacidades de la plataforma
+        self._interactive_notice_logged = False
+        self.interactive_charts_enabled = self._detect_interactive_chart_support()
 
         # Estado con valores por defecto
 
@@ -2403,6 +2405,66 @@ class MainApp:
         except Exception:
             stored = None
         return self._sanitize_color(stored, default)
+
+    def _detect_interactive_chart_support(self) -> bool:
+        """Determina si la plataforma actual puede renderizar gráficas interactivas."""
+
+        try:
+            if getattr(self.page, "web", False):
+                return True
+        except Exception:
+            pass
+
+        platform_name = ""
+        try:
+            platform = getattr(self.page, "platform", None)
+            if platform is not None:
+                if hasattr(platform, "name"):
+                    platform_name = str(platform.name).lower()
+                else:
+                    platform_name = str(platform).lower()
+        except Exception:
+            platform_name = ""
+
+        if platform_name in {"android", "ios", "fuchsia", "web"}:
+            return True
+        return False
+
+    def _build_chart_notice(self) -> ft.Container:
+        accent = self._accent_ui()
+        text_color = "#f5f5f5" if self.is_dark_mode else "#1f2933"
+        background = ft.Colors.with_opacity(0.08, accent)
+        return ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.INFO_OUTLINED, color=accent, size=20),
+                    ft.Text(
+                        "Las gráficas interactivas no están disponibles en esta plataforma. "
+                        "Se mostrarán versiones estáticas en su lugar.",
+                        size=13,
+                        color=text_color,
+                        expand=True,
+                        selectable=False,
+                    ),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=14, vertical=10),
+            border_radius=10,
+            bgcolor=background,
+        )
+
+    def _wrap_chart_with_notice(self, chart: ft.Control | None) -> ft.Control:
+        if chart is None:
+            return ft.Text("No fue posible generar la gráfica.")
+        if self.interactive_charts_enabled:
+            return chart
+        return ft.Column(
+            controls=[self._build_chart_notice(), chart],
+            spacing=12,
+            expand=True,
+        )
 
     def _remember_orbit_axis(self, axis: str, value: Optional[str]):
         key = "orbit_axis_x" if str(axis).lower().startswith("x") else "orbit_axis_y"
@@ -5860,13 +5922,21 @@ class MainApp:
 
         # Contenedor de gráficas
 
+        initial_loading = ft.Column(
+
+            [ft.ProgressRing(), ft.Text("Preparando análisis...")],
+
+            alignment="center",
+
+            expand=True,
+
+        )
+
         self.chart_container = ft.Container(
 
             expand=True,
 
-            content=ft.Column([ft.ProgressRing(), ft.Text("Preparando análisis...")],
-
-                              alignment="center", expand=True),
+            content=self._wrap_chart_with_notice(initial_loading),
 
             bgcolor=ft.Colors.with_opacity(0.02, "white" if self.is_dark_mode else "black"),
 
@@ -5877,6 +5947,18 @@ class MainApp:
             margin=ft.margin.only(top=20)
 
         )
+
+        if not self.interactive_charts_enabled and not self._interactive_notice_logged:
+
+            self._log(
+
+                "Las gráficas interactivas requieren WebView y no están disponibles en esta plataforma; "
+
+                "se mostrarán gráficos estáticos."
+
+            )
+
+            self._interactive_notice_logged = True
 
 
 
@@ -5922,7 +6004,7 @@ class MainApp:
 
         if self.chart_container:
 
-            self.chart_container.content = ft.Column(
+            loading_view = ft.Column(
 
                 [ft.ProgressRing(), ft.Text("Generando análisis FFT...")],
 
@@ -5934,17 +6016,21 @@ class MainApp:
 
             )
 
+            self.chart_container.content = self._wrap_chart_with_notice(loading_view)
+
             if self.chart_container.page:
 
                 self.chart_container.update()
 
             await asyncio.sleep(0.1)
 
-            
+
 
             new_chart = self._create_plot()
 
-            self.chart_container.content = new_chart
+
+
+            self.chart_container.content = self._wrap_chart_with_notice(new_chart)
 
             if self.chart_container.page:
 
@@ -8006,180 +8092,181 @@ class MainApp:
 
             chart = None
             plotly_error: Optional[Exception] = None
-            try:
-                template_name = "plotly_dark" if self.is_dark_mode else "plotly_white"
-                plotly_fig = make_subplots(
-                    rows=2,
-                    cols=1,
-                    shared_x=False,
-                    vertical_spacing=0.08,
-                    specs=[[{}], [{"secondary_y": True}]],
-                )
-
-                time_hover = "Tiempo: %{x:.3f} s"
-                time_hover += f"<br>{_ylabel}: %{{y:{hover_precision}}}"
-                time_hover += "<extra></extra>"
-                plotly_fig.add_trace(
-                    go.Scatter(
-                        x=t_segment,
-                        y=_y_time,
-                        mode="lines",
-                        line=dict(color=self.time_plot_color, width=2),
-                        name=fig_time_title,
-                        hovertemplate=time_hover,
-                    ),
-                    row=1,
-                    col=1,
-                )
-
-                annotation_color = "#ffffff" if self.is_dark_mode else "#000000"
-                plotly_fig.add_annotation(
-                    x=0.01,
-                    y=0.98,
-                    xref="paper",
-                    yref="paper",
-                    text=_rms_text,
-                    showarrow=False,
-                    align="left",
-                    font=dict(color=annotation_color, size=12),
-                    bgcolor="rgba(0,0,0,0)",
-                )
-
-                if xplot is not None and yplot is not None:
-                    fft_custom = None
-                    try:
-                        fft_custom = np.column_stack(
-                            [
-                                np.asarray(xplot, dtype=float),
-                                np.asarray(xplot, dtype=float) * 60.0,
-                            ]
-                        )
-                    except Exception:
+            if self.interactive_charts_enabled:
+                try:
+                    template_name = "plotly_dark" if self.is_dark_mode else "plotly_white"
+                    plotly_fig = make_subplots(
+                        rows=2,
+                        cols=1,
+                        shared_x=False,
+                        vertical_spacing=0.08,
+                        specs=[[{}], [{"secondary_y": True}]],
+                    )
+    
+                    time_hover = "Tiempo: %{x:.3f} s"
+                    time_hover += f"<br>{_ylabel}: %{{y:{hover_precision}}}"
+                    time_hover += "<extra></extra>"
+                    plotly_fig.add_trace(
+                        go.Scatter(
+                            x=t_segment,
+                            y=_y_time,
+                            mode="lines",
+                            line=dict(color=self.time_plot_color, width=2),
+                            name=fig_time_title,
+                            hovertemplate=time_hover,
+                        ),
+                        row=1,
+                        col=1,
+                    )
+    
+                    annotation_color = "#ffffff" if self.is_dark_mode else "#000000"
+                    plotly_fig.add_annotation(
+                        x=0.01,
+                        y=0.98,
+                        xref="paper",
+                        yref="paper",
+                        text=_rms_text,
+                        showarrow=False,
+                        align="left",
+                        font=dict(color=annotation_color, size=12),
+                        bgcolor="rgba(0,0,0,0)",
+                    )
+    
+                    if xplot is not None and yplot is not None:
                         fft_custom = None
-
-                    fft_hover = f"Frecuencia ({freq_unit}): %{{x:.3f}}"
-                    if fft_custom is not None:
-                        fft_hover += "<br>Frecuencia (Hz): %{customdata[0]:.3f}"
-                    fft_hover += "<br>Velocidad: %{y:.3f} mm/s"
-                    if fft_custom is not None:
-                        fft_hover += "<br>RPM: %{customdata[1]:.0f}"
-                    fft_hover += "<extra></extra>"
-
-                    plotly_fig.add_trace(
-                        go.Scatter(
-                            x=xplot_disp,
-                            y=yplot,
-                            mode="lines",
-                            line=dict(color=self.fft_plot_color, width=2),
-                            fill="tozeroy",
-                            name=fig_freq_title,
-                            customdata=fft_custom,
-                            hovertemplate=fft_hover,
-                        ),
-                        row=2,
-                        col=1,
-                        secondary_y=False,
-                    )
-
-                if peak_points:
-                    peak_x_disp = [pt for pt, _ in peak_points]
-                    peak_y = [amp for _, amp in peak_points]
-                    plotly_fig.add_trace(
-                        go.Scatter(
-                            x=peak_x_disp,
-                            y=peak_y,
-                            mode="markers",
-                            marker=dict(color="#e74c3c", size=9),
-                            name="Picos principales",
-                            hovertext=peak_labels,
-                            hoverinfo="text",
-                        ),
-                        row=2,
-                        col=1,
-                        secondary_y=False,
-                    )
-
-                if yplot_dbv is not None:
-                    plotly_fig.add_trace(
-                        go.Scatter(
-                            x=xplot_disp,
-                            y=yplot_dbv,
-                            mode="lines",
-                            line=dict(color="#9b59b6", width=1.6, dash="dash"),
-                            name="Nivel [dBV]",
-                            hovertemplate="Frecuencia: %{x:.3f}<br>Nivel: %{y:.2f} dBV<extra></extra>",
-                        ),
-                        row=2,
-                        col=1,
-                        secondary_y=True,
-                    )
-
-                if visible_marks:
-                    try:
-                        fft_ymax = float(np.nanmax(yplot)) if yplot is not None and len(yplot) > 0 else 0.0
-                    except Exception:
-                        fft_ymax = 0.0
-                    if not np.isfinite(fft_ymax) or fft_ymax <= 0:
-                        fft_ymax = 1.0
-                    for pos, label, color_hex in visible_marks:
-                        plotly_fig.add_shape(
-                            type="line",
-                            x0=pos,
-                            x1=pos,
-                            y0=0,
-                            y1=fft_ymax,
-                            xref="x2",
-                            yref="y2",
-                            line=dict(color=color_hex, dash="dash", width=1.2, opacity=0.85),
+                        try:
+                            fft_custom = np.column_stack(
+                                [
+                                    np.asarray(xplot, dtype=float),
+                                    np.asarray(xplot, dtype=float) * 60.0,
+                                ]
+                            )
+                        except Exception:
+                            fft_custom = None
+    
+                        fft_hover = f"Frecuencia ({freq_unit}): %{{x:.3f}}"
+                        if fft_custom is not None:
+                            fft_hover += "<br>Frecuencia (Hz): %{customdata[0]:.3f}"
+                        fft_hover += "<br>Velocidad: %{y:.3f} mm/s"
+                        if fft_custom is not None:
+                            fft_hover += "<br>RPM: %{customdata[1]:.0f}"
+                        fft_hover += "<extra></extra>"
+    
+                        plotly_fig.add_trace(
+                            go.Scatter(
+                                x=xplot_disp,
+                                y=yplot,
+                                mode="lines",
+                                line=dict(color=self.fft_plot_color, width=2),
+                                fill="tozeroy",
+                                name=fig_freq_title,
+                                customdata=fft_custom,
+                                hovertemplate=fft_hover,
+                            ),
+                            row=2,
+                            col=1,
+                            secondary_y=False,
                         )
-                        plotly_fig.add_annotation(
-                            x=pos,
-                            y=fft_ymax,
-                            xref="x2",
-                            yref="y2",
-                            text=label,
-                            showarrow=False,
-                            font=dict(color=color_hex, size=11),
-                            yanchor="bottom",
+    
+                    if peak_points:
+                        peak_x_disp = [pt for pt, _ in peak_points]
+                        peak_y = [amp for _, amp in peak_points]
+                        plotly_fig.add_trace(
+                            go.Scatter(
+                                x=peak_x_disp,
+                                y=peak_y,
+                                mode="markers",
+                                marker=dict(color="#e74c3c", size=9),
+                                name="Picos principales",
+                                hovertext=peak_labels,
+                                hoverinfo="text",
+                            ),
+                            row=2,
+                            col=1,
+                            secondary_y=False,
                         )
-
-                plotly_fig.update_xaxes(title_text="Tiempo (s)", row=1, col=1)
-                plotly_fig.update_yaxes(title_text=_ylabel, row=1, col=1)
-                plotly_fig.update_xaxes(title_text=f"Frecuencia ({freq_unit})", row=2, col=1)
-                plotly_fig.update_yaxes(title_text="Velocidad [mm/s]", row=2, col=1, secondary_y=False)
-
-                if yplot_dbv is not None:
-                    plotly_fig.update_yaxes(title_text="Nivel [dBV]", row=2, col=1, secondary_y=True)
-                    try:
-                        max_db = float(np.nanmax(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
-                        min_db = float(np.nanmin(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
-                    except Exception:
-                        max_db = 0.0
-                        min_db = 0.0
-                    lower = db_axis_min if db_axis_min is not None else min_db
-                    upper = db_axis_max if db_axis_max is not None else max_db
-                    if np.isfinite(lower) and np.isfinite(upper) and upper != lower:
-                        plotly_fig.update_yaxes(range=[lower, upper], row=2, col=1, secondary_y=True)
-
-                if zmin is not None:
-                    plotly_fig.update_xaxes(range=[zmin / freq_scale, zmax / freq_scale], row=2, col=1)
-                elif fmax_ui and fmax_ui > 0:
-                    plotly_fig.update_xaxes(range=[0.0, float(fmax_ui) / freq_scale], row=2, col=1)
-
-                plotly_fig.update_layout(
-                    template=template_name,
-                    height=650,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
-                    margin=dict(l=60, r=40, t=60, b=60),
-                    hovermode="x unified",
-                    title=dict(text="Análisis tiempo / frecuencia", x=0.5),
-                )
-
-                chart = PlotlyChart(plotly_fig, expand=True)
-            except Exception as exc:
-                plotly_error = exc
-                chart = None
-
+    
+                    if yplot_dbv is not None:
+                        plotly_fig.add_trace(
+                            go.Scatter(
+                                x=xplot_disp,
+                                y=yplot_dbv,
+                                mode="lines",
+                                line=dict(color="#9b59b6", width=1.6, dash="dash"),
+                                name="Nivel [dBV]",
+                                hovertemplate="Frecuencia: %{x:.3f}<br>Nivel: %{y:.2f} dBV<extra></extra>",
+                            ),
+                            row=2,
+                            col=1,
+                            secondary_y=True,
+                        )
+    
+                    if visible_marks:
+                        try:
+                            fft_ymax = float(np.nanmax(yplot)) if yplot is not None and len(yplot) > 0 else 0.0
+                        except Exception:
+                            fft_ymax = 0.0
+                        if not np.isfinite(fft_ymax) or fft_ymax <= 0:
+                            fft_ymax = 1.0
+                        for pos, label, color_hex in visible_marks:
+                            plotly_fig.add_shape(
+                                type="line",
+                                x0=pos,
+                                x1=pos,
+                                y0=0,
+                                y1=fft_ymax,
+                                xref="x2",
+                                yref="y2",
+                                line=dict(color=color_hex, dash="dash", width=1.2, opacity=0.85),
+                            )
+                            plotly_fig.add_annotation(
+                                x=pos,
+                                y=fft_ymax,
+                                xref="x2",
+                                yref="y2",
+                                text=label,
+                                showarrow=False,
+                                font=dict(color=color_hex, size=11),
+                                yanchor="bottom",
+                            )
+    
+                    plotly_fig.update_xaxes(title_text="Tiempo (s)", row=1, col=1)
+                    plotly_fig.update_yaxes(title_text=_ylabel, row=1, col=1)
+                    plotly_fig.update_xaxes(title_text=f"Frecuencia ({freq_unit})", row=2, col=1)
+                    plotly_fig.update_yaxes(title_text="Velocidad [mm/s]", row=2, col=1, secondary_y=False)
+    
+                    if yplot_dbv is not None:
+                        plotly_fig.update_yaxes(title_text="Nivel [dBV]", row=2, col=1, secondary_y=True)
+                        try:
+                            max_db = float(np.nanmax(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
+                            min_db = float(np.nanmin(yplot_dbv)) if len(yplot_dbv) > 0 else 0.0
+                        except Exception:
+                            max_db = 0.0
+                            min_db = 0.0
+                        lower = db_axis_min if db_axis_min is not None else min_db
+                        upper = db_axis_max if db_axis_max is not None else max_db
+                        if np.isfinite(lower) and np.isfinite(upper) and upper != lower:
+                            plotly_fig.update_yaxes(range=[lower, upper], row=2, col=1, secondary_y=True)
+    
+                    if zmin is not None:
+                        plotly_fig.update_xaxes(range=[zmin / freq_scale, zmax / freq_scale], row=2, col=1)
+                    elif fmax_ui and fmax_ui > 0:
+                        plotly_fig.update_xaxes(range=[0.0, float(fmax_ui) / freq_scale], row=2, col=1)
+    
+                    plotly_fig.update_layout(
+                        template=template_name,
+                        height=650,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+                        margin=dict(l=60, r=40, t=60, b=60),
+                        hovermode="x unified",
+                        title=dict(text="Análisis tiempo / frecuencia", x=0.5),
+                    )
+    
+                    chart = PlotlyChart(plotly_fig, expand=True)
+                except Exception as exc:
+                    plotly_error = exc
+                    chart = None
+    
             if chart is None:
                 chart = _build_matplotlib_time_freq_chart()
                 if chart is None:
