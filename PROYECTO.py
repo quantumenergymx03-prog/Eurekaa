@@ -342,6 +342,7 @@ def _build_charlotte_reference_table(
     entries: Optional[List[Dict[str, str]]],
     styles,
     accent_color,
+    table_width: Optional[float] = None,
 ):
     """Genera una tabla con estilo para la referencia de Charlotte que respete los anchos."""
 
@@ -417,7 +418,18 @@ def _build_charlotte_reference_table(
             ]
         )
 
-    table = Table(rows, colWidths=[70, 160, 220])
+    if table_width is None:
+        table_width = 450.0
+    try:
+        table_width = float(table_width)
+    except Exception:
+        table_width = 450.0
+    col_widths = [
+        table_width * 0.16,
+        table_width * 0.28,
+        table_width * 0.56,
+    ]
+    table = Table(rows, colWidths=col_widths)
     table.setStyle(
         TableStyle(
             [
@@ -426,15 +438,52 @@ def _build_charlotte_reference_table(
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("WORDWRAP", (0, 1), (-1, -1), "CJK"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d7d7d7")),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [colors.HexColor("#fbfcff"), colors.HexColor("#f2f5fb")],
+                ),
             ]
         )
     )
     return table
+
+
+def _normalize_color(color_value: Any, default: str = "#1f77b4") -> colors.Color:
+    """Convierte un valor genérico a un color de reportlab."""
+
+    if isinstance(color_value, colors.Color):
+        return color_value
+    try:
+        return colors.HexColor(str(color_value))
+    except Exception:
+        return colors.HexColor(default)
+
+
+def _mix_colors(color_a: Any, color_b: Any, weight: float = 0.5) -> colors.Color:
+    """Mezcla dos colores en el espacio RGB."""
+
+    weight = max(0.0, min(1.0, float(weight)))
+    ca = _normalize_color(color_a)
+    cb = _normalize_color(color_b)
+    r = ca.red * (1 - weight) + cb.red * weight
+    g = ca.green * (1 - weight) + cb.green * weight
+    b = ca.blue * (1 - weight) + cb.blue * weight
+    return colors.Color(r, g, b)
+
+
+def _lighten_color(color_value: Any, strength: float = 0.7) -> colors.Color:
+    """Aclara un color mezclándolo con blanco."""
+
+    strength = max(0.0, min(1.0, float(strength)))
+    return _mix_colors(_normalize_color(color_value), colors.white, strength)
 
 
 class ProbabilityBar(Flowable):
@@ -508,17 +557,23 @@ def _pdf_metric_grid(rows: List[Tuple[str, str]], accent_color) -> Table:
 def _pdf_card(contents: List[Any], accent_color, background: str = "#ffffff") -> Table:
     """Envuelve contenidos en una tarjeta estilo app."""
 
-    card = Table([[c] for c in contents], colWidths=[440])
+    accent = _normalize_color(accent_color)
+    base_background = _normalize_color(background, default="#ffffff")
+    highlight = _lighten_color(accent, 0.78)
+    blended_background = _mix_colors(base_background, highlight, 0.55)
+    border_color = _mix_colors(accent, colors.black, 0.2)
+    card = Table([[c] for c in contents])
     card.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(background)),
-                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#bcbcbc")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.0, colors.white),
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("BACKGROUND", (0, 0), (-1, -1), blended_background),
+                ("BOX", (0, 0), (-1, -1), 0.8, border_color),
+                ("LINEBEFORE", (0, 0), (-1, -1), 6, accent),
+                ("LEFTPADDING", (0, 0), (-1, -1), 16),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ]
         )
     )
@@ -3503,7 +3558,14 @@ class MainApp:
                     aux_ax.set_ylabel(col)
                     aux_imgs.append(self._save_temp_plot(aux_fig, tmp_imgs))
 
-            doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=A4,
+                leftMargin=36,
+                rightMargin=36,
+                topMargin=48,
+                bottomMargin=36,
+            )
             styles = getSampleStyleSheet()
             try:
                 accent_hex = self._accent_hex()
@@ -5192,7 +5254,7 @@ class MainApp:
                 for chunk in _chunk_list(chart_paths, 2):
                     row = []
                     for img in chunk:
-                        row.append(Image(img, width=(doc.width / 2) - 6, height=180))
+                        row.append(Image(img, width=(doc.width / 2) - 6, height=210))
                     if len(row) == 1:
                         row.append(Spacer(1, 0))
                     chart_rows.append(row)
@@ -5207,6 +5269,7 @@ class MainApp:
                     )
                 )
                 elements.append(charts_table)
+                elements.append(Spacer(1, 14))
 
             if aux_imgs:
                 elements.append(Paragraph("Variables auxiliares", styles["SectionHeading"]))
@@ -5214,7 +5277,7 @@ class MainApp:
                 for chunk in _chunk_list(aux_imgs, 2):
                     row = []
                     for img in chunk:
-                        row.append(Image(img, width=(doc.width / 2) - 6, height=150))
+                        row.append(Image(img, width=(doc.width / 2) - 6, height=180))
                     if len(row) == 1:
                         row.append(Spacer(1, 0))
                     aux_rows.append(row)
@@ -5309,10 +5372,11 @@ class MainApp:
                 elements.append(PageBreak())
                 elements.append(Paragraph("Referencia Tabla de Charlotte (Motores eléctricos)", styles['SectionHeading']))
                 charlotte_table = _build_charlotte_reference_table(
-                    charlotte_catalog_pdf, styles, accent_color
+                    charlotte_catalog_pdf, styles, accent_color, doc.width
                 )
                 if charlotte_table is not None:
                     elements.append(charlotte_table)
+                    elements.append(Spacer(1, 16))
 
             doc.build(elements)
 
