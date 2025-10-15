@@ -6125,14 +6125,14 @@ class MainApp:
 
         html_error: Optional[Exception] = None
         try:
-            html = pio.to_html(figure, include_plotlyjs="cdn", full_html=False)
+            html = pio.to_html(figure, include_plotlyjs="inline", full_html=False)
             html_control = ft.Html(content=html, expand=expand, height=height)
             return html_control, original_error
         except Exception as exc:
             html_error = exc
 
         try:
-            html = pio.to_html(figure, include_plotlyjs="cdn", full_html=True)
+            html = pio.to_html(figure, include_plotlyjs="inline", full_html=True)
             data_url = "data:text/html;base64," + base64.b64encode(html.encode("utf-8")).decode("ascii")
             webview = ft.WebView(url=data_url, expand=expand, height=height)
             return webview, original_error or html_error
