@@ -67,6 +67,8 @@ ML_FEATURE_COLUMNS = [
 
 _ML_MODEL = None
 _ML_MODEL_ERROR = None
+_PLOTLY_CHART_SUPPORTED: Optional[bool] = None
+_PLOTLY_CHART_SUPPORT_ERROR: Optional[str] = None
 
 
 def _load_ml_model():
@@ -180,6 +182,24 @@ def _run_ml_diagnosis(feature_row: Dict[str, float]) -> Dict[str, Any]:
             "status": "error",
             "message": f"Error al ejecutar el modelo: {exc}",
         }
+
+
+def _is_plotly_chart_supported() -> bool:
+    """Detecta si Flet puede renderizar PlotlyChart (requiere Kaleido con Chrome)."""
+
+    global _PLOTLY_CHART_SUPPORTED, _PLOTLY_CHART_SUPPORT_ERROR
+    if _PLOTLY_CHART_SUPPORTED is not None:
+        return _PLOTLY_CHART_SUPPORTED
+    try:
+        # Intentamos renderizar una figura mínima para verificar los requisitos de Kaleido.
+        test_fig = go.Figure()
+        pio.to_image(test_fig, format="svg")
+        _PLOTLY_CHART_SUPPORTED = True
+        _PLOTLY_CHART_SUPPORT_ERROR = None
+    except Exception as exc:  # pragma: no cover - depende del entorno del usuario
+        _PLOTLY_CHART_SUPPORTED = False
+        _PLOTLY_CHART_SUPPORT_ERROR = str(exc)
+    return _PLOTLY_CHART_SUPPORTED
 
 # Conjunto de fallas consideradas en la Tabla de Charlotte para motores eléctricos.
 # Cada entrada incluye un identificador, el nombre de la falla y una descripción breve
@@ -6091,10 +6111,17 @@ class MainApp:
         """Intenta renderizar una figura de Plotly y ofrece caídas progresivas."""
 
         original_error: Optional[Exception] = None
-        try:
-            return PlotlyChart(figure, expand=expand), None
-        except Exception as exc:
-            original_error = exc
+        if _is_plotly_chart_supported():
+            try:
+                return PlotlyChart(figure, expand=expand), None
+            except Exception as exc:
+                original_error = exc
+        else:
+            message = (
+                _PLOTLY_CHART_SUPPORT_ERROR
+                or "PlotlyChart deshabilitado: Kaleido requiere Google Chrome instalado"
+            )
+            original_error = RuntimeError(message)
 
         html_error: Optional[Exception] = None
         try:
