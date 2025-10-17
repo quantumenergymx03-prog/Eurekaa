@@ -69,6 +69,15 @@ _ML_MODEL_ERROR = None
 _ML_MODEL_VERSION = None
 
 
+def _integrate_trapezoid(y: Any, x: Any) -> Any:
+    """Wrapper that prefers ``numpy.trapezoid`` when available."""
+
+    trapezoid = getattr(np, "trapezoid", None)
+    if callable(trapezoid):
+        return trapezoid(y, x)
+    return np.trapz(y, x)
+
+
 def _load_ml_model():
     """Carga el modelo de machine learning entrenado desde disco (una única vez)."""
 
@@ -1071,7 +1080,7 @@ def analyze_vibration(
     if len(xf) > 1:
         spec_energy = mag_vel_mm**2
         try:
-            e_total = float(np.trapz(spec_energy, xf))
+            e_total = float(_integrate_trapezoid(spec_energy, xf))
         except Exception:
             e_total = float(np.sum(spec_energy))
         if e_total <= 0:
@@ -1081,7 +1090,7 @@ def analyze_vibration(
             if not np.any(mask):
                 return 0.0
             try:
-                return float(np.trapz(spec_energy[mask], xf[mask]))
+                return float(_integrate_trapezoid(spec_energy[mask], xf[mask]))
             except Exception:
                 return float(np.sum(spec_energy[mask]))
         e_low = _band_energy_int(0.0, 30.0)
@@ -3212,6 +3221,8 @@ class MainApp:
             selected_color = res['severity']['color']
             metadata_pdf = dict(res.get('metadata') or {})
             conflict_pdf = dict(res.get('iso_ml_conflict') or {})
+            axis_summaries_pdf: List[Dict[str, Any]] = list(getattr(self, "_last_axis_severity", []) or [])
+            primary_entry_pdf: Optional[Dict[str, Any]] = getattr(self, "_last_primary_severity", None)
             if axis_summaries_pdf:
                 synced = False
                 for entry in axis_summaries_pdf:
