@@ -357,7 +357,7 @@ def _build_charlotte_reference_table(
             ParagraphStyle(
                 "CharlotteHeader",
                 parent=styles["Heading4"],
-                textColor=colors.white,
+                textColor=colors.black,
                 alignment=1,
                 fontSize=10,
                 leading=12,
@@ -370,7 +370,7 @@ def _build_charlotte_reference_table(
                 "CharlotteCode",
                 parent=styles["Normal"],
                 alignment=1,
-                textColor=accent_color,
+                textColor=colors.black,
                 fontSize=9,
                 leading=11,
                 fontName="Helvetica-Bold",
@@ -384,8 +384,8 @@ def _build_charlotte_reference_table(
                 parent=styles["Normal"],
                 fontSize=9.5,
                 leading=11,
-                textColor=colors.HexColor("#2c3e50"),
-                spaceAfter=1,
+                textColor=colors.black,
+                spaceAfter=0,
             )
         )
     if "CharlotteDescription" not in style_map:
@@ -394,9 +394,9 @@ def _build_charlotte_reference_table(
                 "CharlotteDescription",
                 parent=styles["Normal"],
                 fontSize=8.5,
-                leading=10.5,
-                textColor=colors.HexColor("#4d5b6a"),
-                spaceAfter=3,
+                leading=10,
+                textColor=colors.black,
+                spaceAfter=1,
             )
         )
 
@@ -432,13 +432,14 @@ def _build_charlotte_reference_table(
         table_width * 0.30,
         table_width * 0.52,
     ]
-    table = Table(rows, colWidths=col_widths)
+    table = Table(rows, colWidths=col_widths, repeatRows=1)
     table.hAlign = "LEFT"
     table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f2f2")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -593,13 +594,13 @@ def _pdf_metric_grid(rows: List[Tuple[str, str]], accent_color) -> Table:
     label_style = ParagraphStyle(
         name="metric_label_temp",
         parent=sample["Normal"],
-        textColor=colors.HexColor("#2c3e50"),
+        textColor=colors.black,
     )
     value_style = ParagraphStyle(
         name="metric_value_temp",
         parent=sample["Normal"],
         alignment=2,
-        textColor=colors.HexColor("#2c3e50"),
+        textColor=colors.black,
     )
     data: List[List[Any]] = []
     for label, value in rows:
@@ -612,7 +613,7 @@ def _pdf_metric_grid(rows: List[Tuple[str, str]], accent_color) -> Table:
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#2c3e50")),
+                ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
                 ("LINEABOVE", (0, 0), (-1, 0), 0.3, colors.HexColor("#b0b0b0")),
                 ("LINEBELOW", (0, -1), (-1, -1), 0.3, colors.HexColor("#b0b0b0")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
@@ -626,9 +627,15 @@ def _pdf_metric_grid(rows: List[Tuple[str, str]], accent_color) -> Table:
     return tbl
 
 
-def _pdf_card(contents: List[Any], accent_color, background: str = "#ffffff") -> Table:
+def _pdf_card(
+    contents: List[Any],
+    accent_color,
+    background: str = "#ffffff",
+    padding: Tuple[float, float, float, float] = (10, 10, 16, 14),
+) -> Table:
     """Envuelve contenidos en una tarjeta estilo app."""
 
+    top_pad, bottom_pad, left_pad, right_pad = padding
     accent = _normalize_color(accent_color)
     base_background = _normalize_color(background, default="#ffffff")
     highlight = _lighten_color(accent, 0.78)
@@ -641,14 +648,15 @@ def _pdf_card(contents: List[Any], accent_color, background: str = "#ffffff") ->
                 ("BACKGROUND", (0, 0), (-1, -1), blended_background),
                 ("BOX", (0, 0), (-1, -1), 0.8, border_color),
                 ("LINEBEFORE", (0, 0), (-1, -1), 6, accent),
-                ("LEFTPADDING", (0, 0), (-1, -1), 16),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-                ("TOPPADDING", (0, 0), (-1, -1), 10),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), left_pad),
+                ("RIGHTPADDING", (0, 0), (-1, -1), right_pad),
+                ("TOPPADDING", (0, 0), (-1, -1), top_pad),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), bottom_pad),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ]
         )
     )
+    card.splitByRow = 1
     return card
 
 
@@ -3647,6 +3655,24 @@ class MainApp:
             )
             styles = getSampleStyleSheet()
             try:
+                base_names = [
+                    "Normal",
+                    "BodyText",
+                    "Title",
+                    "Heading1",
+                    "Heading2",
+                    "Heading3",
+                    "Heading4",
+                    "Heading5",
+                    "Heading6",
+                    "Caption",
+                ]
+                for name in base_names:
+                    if name in styles.byName:
+                        styles[name].textColor = colors.black
+            except Exception:
+                pass
+            try:
                 accent_hex = self._accent_hex()
             except Exception:
                 accent_hex = "#1f77b4"
@@ -3700,7 +3726,7 @@ class MainApp:
                         styles_cmd.append(("BOX", (i, 0), (i, 0), 0.5, colors.black))
                         styles_cmd.append(("ALIGN", (i, 0), (i, 0), "CENTER"))
                         styles_cmd.append(("ALIGN", (i, 1), (i, 1), "CENTER"))
-                        text_col = colors.white if i == idx and idx >= 0 else colors.HexColor("#1a2c42")
+                        text_col = colors.white if i == idx and idx >= 0 else colors.black
                         styles_cmd.append(("TEXTCOLOR", (i, 0), (i, 0), text_col))
                         styles_cmd.append(("TEXTCOLOR", (i, 1), (i, 1), text_col))
                     styles_cmd.append(("FONTNAME", (0, 1), (-1, 1), 'Helvetica'))
@@ -3737,7 +3763,7 @@ class MainApp:
                 ParagraphStyle(
                     "HeadingAccent",
                     parent=styles['Heading1'],
-                    textColor=colors.HexColor("#1a2c42"),
+                    textColor=colors.black,
                     spaceAfter=8,
                     fontSize=18,
                     leading=22,
@@ -3747,7 +3773,7 @@ class MainApp:
                 ParagraphStyle(
                     "SectionHeading",
                     parent=styles['Heading2'],
-                    textColor=colors.HexColor("#1a2c42"),
+                    textColor=colors.black,
                     spaceBefore=12,
                     spaceAfter=6,
                     fontSize=14,
@@ -3758,7 +3784,7 @@ class MainApp:
                 ParagraphStyle(
                     "Muted",
                     parent=styles['Normal'],
-                    textColor=colors.HexColor("#6c7a89"),
+                    textColor=colors.black,
                     fontSize=9,
                     leading=12,
                 )
@@ -3767,7 +3793,7 @@ class MainApp:
                 ParagraphStyle(
                     "Overline",
                     parent=styles['Normal'],
-                    textColor=colors.HexColor("#4c5b6b"),
+                    textColor=colors.black,
                     fontSize=8,
                     leading=10,
                     spaceBefore=2,
@@ -3778,7 +3804,7 @@ class MainApp:
                 ParagraphStyle(
                     "CardTitle",
                     parent=styles['Heading3'],
-                    textColor=colors.HexColor("#1a2c42"),
+                    textColor=colors.black,
                     fontSize=12,
                     spaceAfter=4,
                 )
@@ -3906,7 +3932,7 @@ class MainApp:
                                 _mix_colors(accent_color, colors.white, 0.8),
                                 _mix_colors(accent_color, colors.white, 0.9),
                             ]),
-                            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1a2c42")),
+                            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
                             ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
                             ("LEFTPADDING", (0, 0), (-1, -1), 8),
                             ("RIGHTPADDING", (0, 0), (-1, -1), 8),
@@ -3984,7 +4010,7 @@ class MainApp:
             if not exec_findings:
                 exec_findings = ["Sin anomalías evidentes según las reglas actuales."]
             findings_items = [
-                ListItem(Paragraph(text, styles['Normal']), bulletColor=colors.HexColor("#1a2c42"))
+                ListItem(Paragraph(text, styles['Normal']), bulletColor=colors.black)
                 for text in exec_findings
             ]
             insights_body: List[Any] = [Paragraph("Hallazgos clave", styles['CardTitle'])]
@@ -4021,7 +4047,13 @@ class MainApp:
             elements.append(Spacer(1, 14))
 
             if axis_table_rows:
-                axis_table = Table(axis_table_rows, colWidths=[doc.width * 0.34, doc.width * 0.28, doc.width * 0.38])
+                inner_axis_width = doc.width - 32
+                col_layout = [
+                    inner_axis_width * 0.34,
+                    inner_axis_width * 0.27,
+                    inner_axis_width * 0.39,
+                ]
+                axis_table = Table(axis_table_rows, colWidths=col_layout)
                 axis_table.setStyle(
                     TableStyle(
                         [
@@ -4032,6 +4064,7 @@ class MainApp:
                             ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                             ("TOPPADDING", (0, 0), (-1, -1), 6),
                             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                            ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
                             ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#d7d7d7")),
                         ]
                     )
@@ -4040,6 +4073,7 @@ class MainApp:
                     [Paragraph("Detalle por canal", styles['CardTitle']), axis_table],
                     accent_color,
                     background="#ffffff",
+                    padding=(8, 8, 14, 14),
                 )
                 elements.append(axis_card)
                 elements.append(Spacer(1, 14))
@@ -4047,7 +4081,7 @@ class MainApp:
             exp_lines_pdf2 = self._build_explanations(res, exec_findings)
             if exp_lines_pdf2:
                 exp_items = [
-                    ListItem(Paragraph(line, styles['Normal']), bulletColor=colors.HexColor("#1a2c42"))
+                    ListItem(Paragraph(line, styles['Normal']), bulletColor=colors.black)
                     for line in exp_lines_pdf2
                 ]
                 exp_card = _pdf_card(
@@ -4239,18 +4273,22 @@ class MainApp:
                     elements.append(Spacer(1, 12))
 
             if charlotte_catalog_pdf:
-                elements.append(PageBreak())
+                elements.append(Spacer(1, 18))
                 elements.append(Paragraph("Referencia Tabla de Charlotte (Motores eléctricos)", styles['SectionHeading']))
                 charlotte_table = _build_charlotte_reference_table(
-                    charlotte_catalog_pdf, styles, accent_color, doc.width - 60
+                    charlotte_catalog_pdf, styles, accent_color, doc.width - 48
                 )
                 if charlotte_table is not None:
-                    elements.append(
-                        _pdf_card([
+                    charlotte_card = _pdf_card(
+                        [
                             Paragraph("Modos de falla y descripción", styles['CardTitle']),
                             charlotte_table,
-                        ], accent_color, background="#ffffff")
+                        ],
+                        accent_color,
+                        background="#ffffff",
+                        padding=(6, 10, 12, 12),
                     )
+                    elements.append(charlotte_card)
                     elements.append(Spacer(1, 16))
 
             doc.build(elements, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
@@ -6969,7 +7007,8 @@ class MainApp:
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f2f2")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                    ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
