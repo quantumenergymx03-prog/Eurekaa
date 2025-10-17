@@ -65,17 +65,29 @@ ML_FEATURE_COLUMNS = [
 
 _ML_MODEL = None
 _ML_MODEL_ERROR = None
+_ML_MODEL_VERSION = None
 
 
 def _load_ml_model():
     """Carga el modelo de machine learning entrenado desde disco (una única vez)."""
 
-    global _ML_MODEL, _ML_MODEL_ERROR
+    global _ML_MODEL, _ML_MODEL_ERROR, _ML_MODEL_VERSION
     if _ML_MODEL is not None or _ML_MODEL_ERROR is not None:
         return _ML_MODEL
     try:
         _ML_MODEL = joblib.load(MODEL_PATH)
         _ensure_model_feature_names(_ML_MODEL)
+        try:
+            _ML_MODEL_VERSION = getattr(_ML_MODEL, "__version__", None)
+            if not _ML_MODEL_VERSION:
+                _ML_MODEL_VERSION = getattr(_ML_MODEL, "version", None)
+            if not _ML_MODEL_VERSION and hasattr(_ML_MODEL, "steps"):
+                for _, step in getattr(_ML_MODEL, "steps"):
+                    _ML_MODEL_VERSION = getattr(step, "__version__", None) or getattr(step, "version", None)
+                    if _ML_MODEL_VERSION:
+                        break
+        except Exception:
+            _ML_MODEL_VERSION = None
     except FileNotFoundError as exc:
         _ML_MODEL_ERROR = f"Modelo no encontrado en {MODEL_PATH}: {exc}"
     except Exception as exc:  # pragma: no cover - defensivo
@@ -172,6 +184,7 @@ def _run_ml_diagnosis(feature_row: Dict[str, float]) -> Dict[str, Any]:
             "raw_prediction": pred_value,
             "probabilities": probabilities,
             "classes": classes,
+            "model_version": _ML_MODEL_VERSION,
         }
     except Exception as exc:  # pragma: no cover - robustez
         return {
@@ -767,6 +780,24 @@ def analyze_vibration(
     top_k_peaks: int = 5,
     fft_window: str = "hann",
 ) -> Dict[str, Any]:
+    analysis_start = time.perf_counter()
+
+    def _highpass_first_order(y: np.ndarray, dt: float, cutoff_hz: float = 0.5) -> np.ndarray:
+        y = np.asarray(y, dtype=float).ravel()
+        if y.size < 2 or not np.isfinite(dt) or dt <= 0 or not np.isfinite(cutoff_hz) or cutoff_hz <= 0:
+            return y
+        rc = 1.0 / (2.0 * np.pi * cutoff_hz)
+        alpha = rc / (rc + dt)
+        out = np.empty_like(y)
+        prev_x = float(y[0])
+        prev_y = 0.0
+        out[0] = 0.0
+        for i in range(1, y.size):
+            x_i = float(y[i])
+            prev_y = alpha * (prev_y + x_i - prev_x)
+            out[i] = prev_y
+            prev_x = x_i
+        return out
     # ======= FENCE: aislar entradas y normalizar tiempo =======
     # Copias duras (evita vistas / referencias compartidas entre corridas)
        # ============================================================
@@ -995,9 +1026,10 @@ def analyze_vibration(
         trend = np.full_like(a, float(np.mean(a)))
     a_proc = a - trend
     df = fs / len(a) if fs > 0 and len(a) > 0 else 0.0
-    xf, mag_acc, mag_vel_mm, rms_vel_time_mm = _acc_fft_to_vel_mm_s(a_proc, dt)
+    a_hp = _highpass_first_order(a_proc, dt, cutoff_hz=0.5)
+    xf, mag_acc, mag_vel_mm, rms_vel_time_mm = _acc_fft_to_vel_mm_s(a_hp, dt)
     # RMS de aceleración sin DC/tendencia
-    rms_time_acc = float(np.sqrt(np.mean(a_proc**2))) if len(a_proc) else 0.0
+    rms_time_acc = float(np.sqrt(np.mean(a_hp**2))) if len(a_hp) else 0.0
     peak_acc = float(np.max(np.abs(a))) if len(a) else 0.0
     pp_acc = float(np.ptp(a)) if len(a) else 0.0
     if len(mag_vel_mm) > 0:
@@ -1027,15 +1059,37 @@ def analyze_vibration(
     # Severidad basada en RMS de velocidad temporal (mm/s)
     rms_vel_spec_mm = rms_vel_time_mm
     f1 = _get_1x(dom_freq, rpm)
+    rpm_est = None
+    if rpm and np.isfinite(rpm) and rpm > 0:
+        rpm_est = float(rpm)
+    elif f1 and f1 > 0:
+        rpm_est = float(f1 * 60.0)
+    elif dom_freq and dom_freq > 0:
+        rpm_est = float(dom_freq * 60.0)
     r2x = _amp_near(xf, mag_vel_mm, 2.0 * f1 if f1 > 0 else 0.0, df) / (dom_amp + 1e-12)
     r3x = _amp_near(xf, mag_vel_mm, 3.0 * f1 if f1 > 0 else 0.0, df) / (dom_amp + 1e-12)
-    if len(xf) > 0:
-        e_total = float(np.sum(mag_vel_mm**2)) + 1e-12
-        e_low = float(np.sum((mag_vel_mm[(xf >= 0.0) & (xf < 30.0)]**2))) if np.any((xf >= 0) & (xf < 30)) else 0.0
-        e_mid = float(np.sum((mag_vel_mm[(xf >= 30.0) & (xf < 120.0)]**2))) if np.any((xf >= 30) & (xf < 120)) else 0.0
-        e_high = float(np.sum((mag_vel_mm[(xf >= 120.0)]**2))) if np.any(xf >= 120) else 0.0
+    if len(xf) > 1:
+        spec_energy = mag_vel_mm**2
+        try:
+            e_total = float(np.trapz(spec_energy, xf))
+        except Exception:
+            e_total = float(np.sum(spec_energy))
+        if e_total <= 0:
+            e_total = 1e-12
+        def _band_energy_int(lo: float, hi: float) -> float:
+            mask = (xf >= lo) & (xf < hi)
+            if not np.any(mask):
+                return 0.0
+            try:
+                return float(np.trapz(spec_energy[mask], xf[mask]))
+            except Exception:
+                return float(np.sum(spec_energy[mask]))
+        e_low = _band_energy_int(0.0, 30.0)
+        e_mid = _band_energy_int(30.0, 120.0)
+        e_high = _band_energy_int(120.0, float(np.max(xf) if np.any(xf) else 120.0))
     else:
-        e_total = 1e-12; e_low = e_mid = e_high = 0.0
+        e_total = 1e-12
+        e_low = e_mid = e_high = 0.0
     energy_low_frac = float(e_low / e_total) if e_total > 0 else 0.0
     energy_mid_frac = float(e_mid / e_total) if e_total > 0 else 0.0
     energy_high_frac = float(e_high / e_total) if e_total > 0 else 0.0
@@ -1062,6 +1116,9 @@ def analyze_vibration(
     except Exception:
         df_env = 0.0
     sev_label, sev_color = _severity_iso_mm_s(rms_vel_spec_mm)
+    if rms_vel_spec_mm > 7.1 and "insatisfact" not in sev_label.lower() and "inacept" not in sev_label.lower():
+        sev_label = "Insatisfactoria (Crítica)"
+        sev_color = "#e67e22"
     findings: List[str] = []
     findings.append(f"Severidad ISO: {sev_label} (RMS={rms_vel_spec_mm:.3f} mm/s)")
     ml_features = {
@@ -1077,6 +1134,33 @@ def analyze_vibration(
         "energy_mid": energy_mid_frac,
         "energy_high": energy_high_frac,
     }
+    order_summary: Dict[str, Any] = {
+        "rpm_est": rpm_est,
+        "f1_hz": f1 if f1 else 0.0,
+    }
+    if rpm_est and rpm_est > 0:
+        base_f = rpm_est / 60.0
+        order_summary.update(
+            {
+                "amp_1x": _amp_near(xf, mag_vel_mm, base_f, df),
+                "amp_2x": _amp_near(xf, mag_vel_mm, 2.0 * base_f, df),
+                "amp_3x": _amp_near(xf, mag_vel_mm, 3.0 * base_f, df),
+            }
+        )
+        order_peaks: List[Dict[str, float]] = []
+        for peak in peaks_fft or []:
+            freq = float(peak.get("f_hz", 0.0))
+            if freq <= 0:
+                continue
+            order_val = freq / base_f if base_f > 0 else 0.0
+            order_peaks.append(
+                {
+                    "f_hz": freq,
+                    "amp": float(peak.get("amp", 0.0)),
+                    "order": float(order_val),
+                }
+            )
+        order_summary["peaks"] = order_peaks
     ml_result = _run_ml_diagnosis(ml_features)
     if ml_result.get("status") == "ok" and ml_result.get("label"):
         findings.append(f"Diagnóstico ML: {ml_result['label']}")
@@ -1084,6 +1168,44 @@ def analyze_vibration(
         findings.append(f"Diagnóstico ML no disponible: {ml_result['message']}")
     elif ml_result.get("status") == "unavailable" and ml_result.get("message"):
         findings.append(f"Modelo ML no disponible: {ml_result['message']}")
+    def _severity_rank(text: str) -> int:
+        txt = (text or "").lower()
+        if "inacept" in txt or "riesgo" in txt:
+            return 3
+        if "insatisf" in txt or "crít" in txt:
+            return 2
+        if "satisf" in txt or "vigil" in txt or "warning" in txt:
+            return 1
+        return 0
+    def _ml_rank_from_label(label: str) -> Optional[int]:
+        if not label:
+            return None
+        txt = label.lower()
+        good_kw = ["normal", "aceptable", "ok", "sin falla", "healthy", "buena"]
+        warn_kw = ["vigil", "alert", "moderada", "warning", "incipiente"]
+        bad_kw = ["criti", "falla", "fault", "severa", "severe", "critical", "grave", "danger"]
+        if any(k in txt for k in bad_kw):
+            return 3
+        if any(k in txt for k in warn_kw):
+            return 2
+        if any(k in txt for k in good_kw):
+            return 0
+        # Si etiqueta coincide con catálogo Charlotte (código EMxx) asumir condición anómala
+        if re.search(r"em\d{2}", txt):
+            return 2
+        return None
+    iso_rank = _severity_rank(sev_label)
+    conflict_note = None
+    ml_rank = None
+    if ml_result.get("status") == "ok":
+        ml_rank = _ml_rank_from_label(str(ml_result.get("label", "")))
+        if ml_rank is not None and abs(ml_rank - iso_rank) >= 2:
+            if ml_rank < iso_rank:
+                conflict_note = "ML indica condición más benigna que la severidad ISO. Revisar datos."
+            else:
+                conflict_note = "ML indica condición más severa que ISO. Validar diagnóstico."
+    if conflict_note:
+        findings.append(f"⚠️ Conflicto ISO vs ML: {conflict_note}")
     if f1 > 0 and dom_freq > 0:
         if (abs(dom_freq - f1) <= max(tol_frac * f1, min_bins * df)) and (r2x < 0.5) and (r3x < 0.4) and (e_low / e_total > 0.5):
             findings.append("Desbalanceo probable: 1X dominante, 2X/3X bajos, energía en baja frecuencia.")
@@ -1095,6 +1217,7 @@ def analyze_vibration(
         if a_mesh > 0.2 * (dom_amp + 1e-12):
             findings.append(f"Engranes: componente en malla ~{fmesh:.1f} Hz.")
     bearing_hits = []
+    bearing_matches: Dict[str, Dict[str, float]] = {}
     for name, freq in (("BPFO", bpfo_hz), ("BPFI", bpfi_hz), ("BSF", bsf_hz), ("FTF", ftf_hz)):
         if freq and freq > 0:
             tol_env = df_env if df_env > 0 else (df if df > 0 else (1.0/len(a) if len(a)>0 else 0.1))
@@ -1115,6 +1238,17 @@ def analyze_vibration(
                     if sb_avg >= 0.2 * a_env:
                         has_sb = True
                 bearing_hits.append(name + (" (SB)" if has_sb else ""))
+            if xf_env is not None and env_spec is not None and len(xf_env) and len(env_spec):
+                bw = max(tol_frac * freq, tol_env if tol_env > 0 else df if df > 0 else 0.5)
+                idx = np.where(np.abs(xf_env - freq) <= (bw if bw > 0 else 0.5))[0]
+                if idx.size:
+                    peak_idx = idx[np.argmax(env_spec[idx])]
+                    bearing_matches[name] = {
+                        "target_hz": float(freq),
+                        "match_hz": float(xf_env[peak_idx]),
+                        "amp": float(env_spec[peak_idx]),
+                        "delta_hz": float(xf_env[peak_idx] - freq),
+                    }
     if bearing_hits:
         findings.append("Rodamientos: evidencia en envolvente para " + ", ".join(bearing_hits))
     else:
@@ -1219,6 +1353,8 @@ def analyze_vibration(
     if len(findings) == 1:
         findings.append("Sin anomalías evidentes según reglas actuales.")
     severity_summary, core_findings = _split_diagnosis(findings)
+    runtime_s = float(time.perf_counter() - analysis_start)
+    analyzed_at = datetime.utcnow().isoformat()
     return {
         "segment_used": (float(t[0]), float(t[-1])),
         "fs_hz": fs,
@@ -1261,8 +1397,22 @@ def analyze_vibration(
             "features": ml_features,
             "result": ml_result,
         },
+        "iso_ml_conflict": {
+            "conflict": bool(conflict_note),
+            "note": conflict_note,
+            "iso_rank": iso_rank,
+            "ml_rank": ml_rank,
+        },
+        "orders": order_summary,
+        "bearing_matches": bearing_matches,
         "charlotte_catalog": [dict(entry) for entry in CHARLOTTE_MOTOR_FAULTS],
         "charlotte_lines": _charlotte_faults_lines(),
+        "metadata": {
+            "analyzer_version": APP_VERSION,
+            "model_version": ml_result.get("model_version"),
+            "analyzed_at": analyzed_at,
+            "runtime_s": runtime_s,
+        },
     }
 
 
@@ -3060,6 +3210,35 @@ class MainApp:
             selected_rms_mm = res['severity']['rms_mm_s']
             selected_label = res['severity']['label']
             selected_color = res['severity']['color']
+            metadata_pdf = dict(res.get('metadata') or {})
+            conflict_pdf = dict(res.get('iso_ml_conflict') or {})
+            if axis_summaries_pdf:
+                synced = False
+                for entry in axis_summaries_pdf:
+                    if entry.get("is_global"):
+                        entry.update(
+                            {
+                                "rms_mm_s": selected_rms_mm,
+                                "iso_label": selected_label,
+                                "emoji_label": self._classify_severity(selected_rms_mm),
+                                "color": selected_color,
+                            }
+                        )
+                        synced = True
+                        break
+                if not synced:
+                    axis_summaries_pdf.insert(
+                        0,
+                        {
+                            "name": "Global",
+                            "column": "global",
+                            "rms_mm_s": selected_rms_mm,
+                            "iso_label": selected_label,
+                            "emoji_label": self._classify_severity(selected_rms_mm),
+                            "color": selected_color,
+                            "is_global": True,
+                        },
+                    )
 
             unit_map_local: Dict[str, str] = {}
             if isinstance(self.signal_unit_map, dict) and self.signal_unit_map:
@@ -3171,7 +3350,11 @@ class MainApp:
             if unit_mode == 'vel_mm':
                 _y_time = self._acc_to_vel_time_mm(acc_seg, t_seg)
                 _ylabel = 'Velocidad [mm/s]'
-                _rms_text = f"RMS vel: {self._calculate_rms(_y_time):.3f} mm/s" if _y_time.size else 'RMS vel: 0.000 mm/s'
+                _rms_text = (
+                    f"RMS velocidad: {self._calculate_rms(_y_time):.3f} mm/s"
+                    if _y_time.size
+                    else "RMS velocidad: 0.000 mm/s"
+                )
             elif unit_mode == 'acc_g':
                 _y_time = acc_seg / 9.80665
                 _ylabel = 'Aceleración [g]'
@@ -3641,6 +3824,14 @@ class MainApp:
                 ["Clasificación ISO global", primary_label_pdf],
                 ["Frecuencia dominante", f"{features_full['dom_freq']:.2f} Hz"],
             ]
+            if metadata_pdf:
+                summary_rows.append(["Analizado en", metadata_pdf.get('analyzed_at', 'N/D')])
+                summary_rows.append([
+                    "Tiempo de análisis",
+                    f"{float(metadata_pdf.get('runtime_s', 0.0)):.2f} s",
+                ])
+                if metadata_pdf.get("model_version"):
+                    summary_rows.append(["Versión modelo ML", str(metadata_pdf.get("model_version"))])
             for entry in axis_summaries_pdf:
                 if entry.get("is_global"):
                     continue
@@ -3664,6 +3855,32 @@ class MainApp:
                 summary_table,
             ]
             elements.append(_pdf_card(executive_body, accent_color, background="#f4f4f4"))
+            comparison_rows = [["Fuente", "Clasificación", "Detalle"]]
+            comparison_rows.append([
+                "ISO 20816",
+                primary_label_pdf,
+                f"RMS {primary_rms_mm_pdf:.3f} mm/s",
+            ])
+            ml_label_pdf = ml_result_pdf.get('label') if isinstance(ml_result_pdf, dict) else None
+            if ml_result_pdf:
+                comparison_rows.append([
+                    "Modelo ML",
+                    ml_label_pdf or ml_result_pdf.get('status', 'N/D'),
+                    ml_result_pdf.get('message', '') if ml_result_pdf.get('status') != 'ok' else "",
+                ])
+            if conflict_pdf.get('conflict'):
+                comparison_rows.append([
+                    "Conflicto",
+                    "⚠️ ISO vs ML",
+                    conflict_pdf.get('note', 'Revisar discrepancia detectada.'),
+                ])
+            comp_table = Table(comparison_rows, colWidths=[130, 170, 220])
+            self._apply_table_style(comp_table)
+            comparison_body = [
+                Paragraph("Comparativa ISO vs ML", styles['HeadingAccent']),
+                comp_table,
+            ]
+            elements.append(_pdf_card(comparison_body, accent_color, background="#ffffff"))
             elements.append(Spacer(1, 18))
             elements.append(PageBreak())
 
@@ -4781,7 +4998,11 @@ class MainApp:
             if unit_mode == 'vel_mm':
                 _y_time = self._acc_to_vel_time_mm(acc_seg, t_seg)
                 _ylabel = 'Velocidad [mm/s]'
-                _rms_text = f"RMS vel: {self._calculate_rms(_y_time):.3f} mm/s" if _y_time.size else 'RMS vel: 0.000 mm/s'
+                _rms_text = (
+                    f"RMS velocidad: {self._calculate_rms(_y_time):.3f} mm/s"
+                    if _y_time.size
+                    else "RMS velocidad: 0.000 mm/s"
+                )
             elif unit_mode == 'acc_g':
                 _y_time = acc_seg / 9.80665
                 _ylabel = 'Aceleración [g]'
@@ -4819,7 +5040,7 @@ class MainApp:
             # Anotación RMS (m/s) y eje superior en RPM
             try:
                 text_color = "white" if self.is_dark_mode else "black"
-                ax2.text(0.02, 0.95, f"RMS vel: {rms_mm:.3f} mm/s", transform=ax2.transAxes,
+                ax2.text(0.02, 0.95, f"RMS velocidad: {rms_mm:.3f} mm/s", transform=ax2.transAxes,
                          va="top", color=text_color)
                 ax2_rpm = ax2.twiny()
                 xlim = ax2.get_xlim()
@@ -6104,9 +6325,24 @@ class MainApp:
 
     def _calculate_rms(self, signal):
         """
-        Calcula el valor RMS de una señal en el dominio del tiempo.
+        Calcula el valor RMS de una señal en el dominio del tiempo, removiendo
+        componentes DC y tendencia lineal para evitar sesgos subsíncronos.
         """
-        return np.sqrt(np.mean(signal**2))
+        sig = np.asarray(signal, dtype=float).ravel()
+        if sig.size == 0:
+            return 0.0
+        sig = sig[np.isfinite(sig)]
+        if sig.size == 0:
+            return 0.0
+        sig = sig - np.mean(sig)
+        if sig.size > 3:
+            x = np.arange(sig.size, dtype=float)
+            try:
+                p = np.polyfit(x, sig, 1)
+                sig = sig - (p[0] * x + p[1])
+            except Exception:
+                pass
+        return float(np.sqrt(np.mean(sig**2))) if sig.size else 0.0
 
     def _format_peak_label(self, freq_hz: float, amp_mm_s: float, order: float | None = None, unit: str = "mm/s") -> str:
         label = f"{freq_hz:.2f} Hz | {amp_mm_s:.3f} {unit}"
@@ -7863,7 +8099,11 @@ class MainApp:
             if unit_mode == "vel_mm":
                 _y_time = self._acc_to_vel_time_mm(acc_segment, t_segment)
                 _ylabel = "Velocidad [mm/s]"
-                _rms_text = f"RMS vel: {self._calculate_rms(_y_time):.3f} mm/s" if _y_time.size else "RMS vel: 0.000 mm/s"
+                _rms_text = (
+                    f"RMS velocidad: {self._calculate_rms(_y_time):.3f} mm/s"
+                    if _y_time.size
+                    else "RMS velocidad: 0.000 mm/s"
+                )
             elif unit_mode == "acc_g":
                 _y_time = acc_segment / 9.80665
                 _ylabel = "Aceleración [g]"
