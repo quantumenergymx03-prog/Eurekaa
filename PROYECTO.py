@@ -38,6 +38,7 @@ from reportlab.platypus import (
     ListFlowable,
     ListItem,
     Flowable,
+    KeepTogether,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -484,6 +485,74 @@ def _lighten_color(color_value: Any, strength: float = 0.7) -> colors.Color:
 
     strength = max(0.0, min(1.0, float(strength)))
     return _mix_colors(_normalize_color(color_value), colors.white, strength)
+
+
+class CoverHero(Flowable):
+    """Cabecera con gradiente y badges para la portada del PDF."""
+
+    def __init__(
+        self,
+        width: float,
+        height: float,
+        accent_color: Any,
+        title: str,
+        subtitle: str,
+        badges: Optional[List[str]] = None,
+    ) -> None:
+        super().__init__()
+        self.width = float(width)
+        self.height = float(height)
+        self.accent = _normalize_color(accent_color)
+        self.title = title
+        self.subtitle = subtitle
+        self.badges = badges or []
+
+    def wrap(self, availWidth, availHeight):  # pragma: no cover - layout auxiliar
+        width = min(self.width, float(availWidth))
+        return width, self.height
+
+    def draw(self) -> None:  # pragma: no cover - solo dibujo
+        canv = self.canv
+        steps = 48
+        start = self.accent
+        end = _mix_colors(self.accent, colors.HexColor("#0f172a"), 0.75)
+        for idx in range(steps):
+            ratio = idx / max(steps - 1, 1)
+            grad_color = _mix_colors(start, end, ratio)
+            canv.setFillColor(grad_color)
+            y = (self.height / steps) * idx
+            canv.rect(0, y, self.width, self.height / steps + 1, stroke=0, fill=1)
+
+        overlay = canv.beginPath()
+        overlay.moveTo(self.width * 0.45, self.height)
+        overlay.lineTo(self.width, self.height)
+        overlay.lineTo(self.width, 0)
+        overlay.lineTo(self.width * 0.7, 0)
+        overlay.close()
+        canv.setFillColor(_mix_colors(self.accent, colors.white, 0.82))
+        canv.drawPath(overlay, stroke=0, fill=1)
+
+        canv.setFillColor(colors.white)
+        canv.setFont("Helvetica-Bold", 24)
+        canv.drawString(34, self.height - 48, self.title)
+        canv.setFont("Helvetica", 12)
+        canv.drawString(34, self.height - 72, self.subtitle)
+
+        chip_bg = _mix_colors(self.accent, colors.white, 0.88)
+        chip_text = colors.HexColor("#102a43")
+        x_cursor = 34
+        for badge in self.badges:
+            label = str(badge)
+            canv.setFont("Helvetica-Bold", 9)
+            text_width = canv.stringWidth(label, "Helvetica-Bold", 9)
+            chip_width = min(self.width - x_cursor - 20, text_width + 22)
+            if chip_width <= 0:
+                break
+            canv.setFillColor(chip_bg)
+            canv.roundRect(x_cursor, 24, chip_width, 20, 10, stroke=0, fill=1)
+            canv.setFillColor(chip_text)
+            canv.drawString(x_cursor + 11, 30, label)
+            x_cursor += chip_width + 8
 
 
 class ProbabilityBar(Flowable):
@@ -3574,57 +3643,7 @@ class MainApp:
                 accent_color = colors.HexColor(accent_hex)
             except Exception:
                 accent_color = colors.HexColor("#1f77b4")
-            title_style = ParagraphStyle(
-                "title",
-                parent=styles['Title'],
-                textColor=accent_color,
-                spaceAfter=12,
-            )
-            styles.add(
-                ParagraphStyle(
-                    "HeadingAccent",
-                    parent=styles['Heading1'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    spaceAfter=8,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "SectionHeading",
-                    parent=styles['Heading2'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    spaceBefore=12,
-                    spaceAfter=6,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "BulletItem",
-                    parent=styles['Normal'],
-                    leftIndent=18,
-                    spaceAfter=4,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "Muted",
-                    parent=styles['Normal'],
-                    textColor=colors.HexColor("#7f8c8d"),
-                    fontSize=10,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "Chip",
-                    parent=styles['Normal'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    backColor=colors.HexColor("#e6e6e6"),
-                    alignment=1,
-                    fontSize=12,
-                    leading=14,
-                    borderPadding=(4, 8, 4, 8),
-                )
-            )
+
             def _build_severity_semaphore(label: str) -> Optional[Table]:
                 try:
                     def _sev_index(lbl: str) -> int:
@@ -3678,57 +3697,253 @@ class MainApp:
                 except Exception:
                     return None
 
-            elements = []
-            elements.append(Paragraph("Informe Técnico de Vibraciones", title_style))
+            generated_at = datetime.now()
+
+            def _draw_header_footer(canvas, doc_obj):  # pragma: no cover - dibujo
+                canvas.saveState()
+                header_height = 26
+                canvas.setFillColor(_mix_colors(accent_color, colors.black, 0.25))
+                canvas.rect(0, A4[1] - header_height, A4[0], header_height, fill=1, stroke=0)
+                canvas.setFillColor(colors.white)
+                canvas.setFont("Helvetica-Bold", 11)
+                canvas.drawString(36, A4[1] - header_height + 8, "Informe de Vibraciones")
+                canvas.setFont("Helvetica", 8)
+                canvas.drawRightString(A4[0] - 36, A4[1] - header_height + 8, base_name)
+                canvas.setFillColor(colors.HexColor("#7f8c8d"))
+                canvas.setFont("Helvetica", 8)
+                canvas.drawString(36, 24, generated_at.strftime("%d/%m/%Y %H:%M"))
+                canvas.drawRightString(A4[0] - 36, 24, f"Página {doc_obj.page}")
+                canvas.restoreState()
+
+            def _chunk_list(seq, size):
+                for i in range(0, len(seq), size):
+                    yield seq[i : i + size]
+
+            styles.add(
+                ParagraphStyle(
+                    "HeadingAccent",
+                    parent=styles['Heading1'],
+                    textColor=colors.HexColor("#1a2c42"),
+                    spaceAfter=8,
+                    fontSize=18,
+                    leading=22,
+                )
+            )
+            styles.add(
+                ParagraphStyle(
+                    "SectionHeading",
+                    parent=styles['Heading2'],
+                    textColor=colors.HexColor("#1a2c42"),
+                    spaceBefore=12,
+                    spaceAfter=6,
+                    fontSize=14,
+                    leading=18,
+                )
+            )
+            styles.add(
+                ParagraphStyle(
+                    "Muted",
+                    parent=styles['Normal'],
+                    textColor=colors.HexColor("#6c7a89"),
+                    fontSize=9,
+                    leading=12,
+                )
+            )
+            styles.add(
+                ParagraphStyle(
+                    "Overline",
+                    parent=styles['Normal'],
+                    textColor=colors.HexColor("#4c5b6b"),
+                    fontSize=8,
+                    leading=10,
+                    spaceBefore=2,
+                    spaceAfter=0,
+                )
+            )
+            styles.add(
+                ParagraphStyle(
+                    "CardTitle",
+                    parent=styles['Heading3'],
+                    textColor=colors.HexColor("#1a2c42"),
+                    fontSize=12,
+                    spaceAfter=4,
+                )
+            )
+            styles.add(
+                ParagraphStyle(
+                    "CardValue",
+                    parent=styles['Title'],
+                    textColor=accent_color,
+                    fontSize=18,
+                    leading=20,
+                )
+            )
+
+            def _build_metric_tiles(metrics: List[Tuple[str, str]]) -> Optional[Table]:
+                if not metrics:
+                    return None
+                col_count = len(metrics)
+                col_width = doc.width / max(col_count, 1)
+                tiles: List[Any] = []
+                for idx, (value, label) in enumerate(metrics):
+                    shade = _mix_colors(accent_color, colors.white, 0.35 + 0.15 * idx)
+                    tile = Table(
+                        [
+                            [Paragraph(value, styles['CardValue'])],
+                            [Paragraph(label.upper(), styles['Overline'])],
+                        ],
+                        colWidths=[col_width - 12],
+                    )
+                    tile.setStyle(
+                        TableStyle(
+                            [
+                                ("BACKGROUND", (0, 0), (-1, -1), shade),
+                                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                                ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+                                ("ALIGN", (0, 1), (-1, 1), "LEFT"),
+                            ]
+                        )
+                    )
+                    tiles.append(tile)
+                grid = Table([tiles], colWidths=[col_width] * col_count)
+                grid.setStyle(
+                    TableStyle(
+                        [
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                            ("TOPPADDING", (0, 0), (-1, -1), 0),
+                        ]
+                    )
+                )
+                return grid
+
+            def _build_visual_card(title: str, subtitle: str, image_path: str, height: float = 230.0) -> Table:
+                card_contents: List[Any] = [
+                    Paragraph(title, styles['CardTitle'])
+                ]
+                if subtitle:
+                    card_contents.append(Paragraph(subtitle, styles['Muted']))
+                card_contents.append(Spacer(1, 6))
+                card_contents.append(Image(image_path, width=doc.width - 72, height=height))
+                return _pdf_card(card_contents, accent_color, background="#ffffff")
+
+            def _make_balance_table() -> Optional[Table]:
+                frac_low_pdf = float(features_full.get('frac_low', 0.0))
+                frac_mid_pdf = float(features_full.get('frac_mid', 0.0))
+                frac_high_pdf = float(features_full.get('frac_high', 0.0))
+                if (frac_low_pdf + frac_mid_pdf + frac_high_pdf) <= 0:
+                    return None
+                balance_rows = [
+                    ["Baja (0-30 Hz)", f"{frac_low_pdf * 100:.1f}%"],
+                    ["Media (30-120 Hz)", f"{frac_mid_pdf * 100:.1f}%"],
+                    ["Alta (>120 Hz)", f"{frac_high_pdf * 100:.1f}%"],
+                ]
+                balance_table = Table(balance_rows, colWidths=[doc.width * 0.42, doc.width * 0.42])
+                balance_table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+                            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [
+                                _mix_colors(accent_color, colors.white, 0.8),
+                                _mix_colors(accent_color, colors.white, 0.9),
+                            ]),
+                            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1a2c42")),
+                            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                            ("TOPPADDING", (0, 0), (-1, -1), 6),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ("GRID", (0, 0), (-1, -1), 0.25, _mix_colors(accent_color, colors.white, 0.4)),
+                        ]
+                    )
+                )
+                return balance_table
+
+            def _make_top_peaks_table() -> Optional[Table]:
+                if not top_peaks:
+                    return None
+                peaks_data = [[f"Frecuencia ({freq_unit})", "Amplitud (mm/s)", "Orden (X)"]]
+                for pf, pa, order in top_peaks:
+                    peaks_data.append([
+                        f"{pf / freq_scale:.2f}",
+                        f"{pa:.3f}",
+                        f"{order:.2f}" if order else "-",
+                    ])
+                tbl_peaks = Table(peaks_data, colWidths=[doc.width * 0.3, doc.width * 0.3, doc.width * 0.3])
+                self._apply_table_style(tbl_peaks)
+                return tbl_peaks
+
+            hero_badges = [
+                f"Periodo {start_t:.2f}s – {end_t:.2f}s",
+                generated_at.strftime("%d/%m/%Y %H:%M"),
+                f"Versión {APP_VERSION}",
+            ]
+            hero = CoverHero(
+                doc.width,
+                150,
+                accent_color,
+                "Informe de Análisis de Vibraciones",
+                f"Archivo: {base_name}",
+                hero_badges,
+            )
+
+            elements: List[Any] = []
+            elements.append(hero)
             elements.append(Spacer(1, 18))
-            elements.append(Paragraph(f"Archivo analizado: {base_name}", styles['Normal']))
-            elements.append(Spacer(1, 6))
-            elements.append(Paragraph(f"Periodo analizado: {start_t:.2f}s - {end_t:.2f}s", styles['Normal']))
-            elements.append(Spacer(1, 6))
-            elements.append(Paragraph(f"Fecha de generacion: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
-            elements.append(Spacer(1, 6))
-            elements.append(Paragraph(f"Aplicacion: V-Analyzer {APP_VERSION}", styles['Normal']))
-            elements.append(Spacer(1, 14))
+
+            metric_tiles = _build_metric_tiles([
+                (f"{primary_rms_mm_pdf:.3f} mm/s", "RMS global"),
+                (primary_label_pdf, "Clasificación ISO"),
+                (f"{features_full['dom_freq']:.2f} Hz", "Frecuencia dominante"),
+            ])
+            if metric_tiles is not None:
+                elements.append(metric_tiles)
+                elements.append(Spacer(1, 16))
 
             severity_table = _build_severity_semaphore(severity_mm)
-            if severity_table is not None:
-                elements.append(Paragraph("Semáforo general de severidad", styles['SectionHeading']))
-                elements.append(severity_table)
-                elements.append(Spacer(1, 14))
-
-            summary_rows = [
-                ["Indicador", "Valor"],
-                ["RMS velocidad global", f"{primary_rms_mm_pdf:.3f} mm/s"],
-                ["Clasificación ISO global", primary_label_pdf],
-                ["Frecuencia dominante", f"{features_full['dom_freq']:.2f} Hz"],
-            ]
-            for entry in axis_summaries_pdf:
-                if entry.get("is_global"):
-                    continue
-                try:
-                    axis_rms_txt = f"{float(entry.get('rms_mm_s', 0.0)):.3f} mm/s"
-                except Exception:
-                    axis_rms_txt = "N/D"
-                summary_rows.append([
-                    f"RMS {entry.get('name', 'Eje')}",
-                    f"{axis_rms_txt} → {entry.get('iso_label', 'N/D')}",
-                ])
-            summary_table = Table(summary_rows, colWidths=[200, 200])
-            self._apply_table_style(summary_table)
-            executive_body: List[Any] = [
-                Paragraph("Condición general del activo", styles['HeadingAccent']),
+            overview_body: List[Any] = [
+                Paragraph("Resumen ejecutivo", styles['HeadingAccent']),
                 Paragraph(
-                    f"El análisis indica una condición <b>{severity_mm}</b> con RMS global de {primary_rms_mm_pdf:.3f} mm/s.",
+                    f"La condición global del activo es <b>{severity_mm}</b> con una vibración global de {primary_rms_mm_pdf:.3f} mm/s.",
                     styles['Normal'],
                 ),
-                Spacer(1, 6),
-                summary_table,
             ]
-            elements.append(_pdf_card(executive_body, accent_color, background="#f4f4f4"))
-            elements.append(Spacer(1, 18))
-            elements.append(PageBreak())
+            if severity_table is not None:
+                overview_body.append(Spacer(1, 8))
+                overview_body.append(severity_table)
+            balance_table = _make_balance_table()
+            if balance_table is not None:
+                overview_body.append(Spacer(1, 8))
+                overview_body.append(Paragraph("Distribución energética", styles['Muted']))
+                overview_body.append(balance_table)
+            overview_card = _pdf_card(overview_body, accent_color, background="#f9f9ff")
+            elements.append(overview_card)
+            elements.append(Spacer(1, 14))
 
-            # Nota filtro visual (export): obtiene estado actual de la UI
+            exec_findings_all = list(findings_core_pdf)
+            exec_findings = self._select_main_findings(exec_findings_all)
+            if not exec_findings:
+                exec_findings = ["Sin anomalías evidentes según las reglas actuales."]
+            findings_items = [
+                ListItem(Paragraph(text, styles['Normal']), bulletColor=colors.HexColor("#1a2c42"))
+                for text in exec_findings
+            ]
+            insights_body: List[Any] = [Paragraph("Hallazgos clave", styles['CardTitle'])]
+            insights_body.append(
+                ListFlowable(
+                    findings_items,
+                    bulletType="bullet",
+                    start="•",
+                    leftIndent=12,
+                )
+            )
+            insights_body.append(Spacer(1, 6))
+            fft_note = None
             try:
                 _pdf_fc = float(self.lf_cutoff_field.value) if getattr(self, 'lf_cutoff_field', None) and getattr(self.lf_cutoff_field, 'value', '') else 0.5
             except Exception:
@@ -3737,120 +3952,178 @@ class MainApp:
                 _pdf_hide_lf = bool(getattr(self, 'hide_lf_cb', None).value)
             except Exception:
                 _pdf_hide_lf = True
-            _pdf_fft_filter_note = f"Filtro visual FFT: oculta < {_pdf_fc:.2f} Hz" if _pdf_hide_lf else "Filtro visual FFT: sin ocultar"
+            if _pdf_hide_lf:
+                fft_note = f"Filtro FFT aplicado: se ocultan componentes < {_pdf_fc:.2f} Hz"
+            else:
+                fft_note = "Filtro FFT aplicado: espectro completo visible"
+            insights_body.append(Paragraph(fft_note, styles['Muted']))
+            peaks_table = _make_top_peaks_table()
+            if peaks_table is not None:
+                insights_body.append(Spacer(1, 8))
+                insights_body.append(Paragraph("Picos destacados", styles['Muted']))
+                insights_body.append(peaks_table)
+            insights_card = _pdf_card(insights_body, accent_color, background="#ffffff")
+            elements.append(insights_card)
+            elements.append(Spacer(1, 14))
 
-            elements.append(Paragraph("Resumen Ejecutivo", styles['HeadingAccent']))
-            elements.append(Spacer(1, 8))
-            exec_findings_all = list(findings_core_pdf)
-            exec_findings = self._select_main_findings(exec_findings_all)
-            if not exec_findings:
-                exec_findings = ["Sin anomalias evidentes segun reglas actuales."]
-            elements.append(Paragraph(f"Clasificacion ISO global: {severity_mm}", styles['Normal']))
-            elements.append(Spacer(1, 4))
-            elements.append(Paragraph(f"RMS velocidad global: {rms_mm:.3f} mm/s", styles['Normal']))
             if axis_table_rows:
-                tbl_axes = Table(axis_table_rows, colWidths=[160, 120, 180])
-                self._apply_table_style(tbl_axes)
-                elements.append(tbl_axes)
-                elements.append(Spacer(1, 10))
-            elements.append(Paragraph(f"Frecuencia dominante: {features_full['dom_freq']:.2f} Hz", styles['Normal']))
-            elements.append(Spacer(1, 4))
-            frac_low_pdf = float(features_full.get('frac_low', 0.0))
-            frac_mid_pdf = float(features_full.get('frac_mid', 0.0))
-            frac_high_pdf = float(features_full.get('frac_high', 0.0))
-            if (frac_low_pdf + frac_mid_pdf + frac_high_pdf) > 0:
-                balance_row = [
-                    f"Baja (0-30 Hz): {frac_low_pdf * 100:.1f}%",
-                    f"Media (30-120 Hz): {frac_mid_pdf * 100:.1f}%",
-                    f"Alta (>120 Hz): {frac_high_pdf * 100:.1f}%",
-                ]
-                balance_tbl = Table([balance_row], colWidths=[150, 180, 160], hAlign="LEFT")
-                balance_tbl.setStyle(
+                axis_table = Table(axis_table_rows, colWidths=[doc.width * 0.34, doc.width * 0.28, doc.width * 0.38])
+                axis_table.setStyle(
                     TableStyle(
                         [
-                            ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#3498db")),
-                            ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#9b59b6")),
-                            ("BACKGROUND", (2, 0), (2, 0), colors.HexColor("#e67e22")),
+                            ("BACKGROUND", (0, 0), (-1, 0), accent_color),
                             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                            ("FONTSIZE", (0, 0), (-1, 0), 10),
-                            ("BOX", (0, 0), (-1, 0), 0.25, colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                            ("TOPPADDING", (0, 0), (-1, -1), 6),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#d7d7d7")),
                         ]
                     )
                 )
-                elements.append(balance_tbl)
-                elements.append(Spacer(1, 10))
-            elements.append(Paragraph(_pdf_fft_filter_note, styles['Normal']))
-            elements.append(Spacer(1, 10))
-            # Omitir bloque duplicado de diagnostico para evitar repeticion
-            # elements.append(Paragraph("Diagnostico:", styles['Heading2']))
-            for item in []:
-                elements.append(Paragraph(f"- {item}", styles['Normal']))
+                axis_card = _pdf_card(
+                    [Paragraph("Detalle por canal", styles['CardTitle']), axis_table],
+                    accent_color,
+                    background="#ffffff",
+                )
+                elements.append(axis_card)
+                elements.append(Spacer(1, 14))
 
-            # Explicacion y recomendaciones (PDF)
-            # Explicación y recomendaciones (unificadas con la app)
             exp_lines_pdf2 = self._build_explanations(res, exec_findings)
-            elements.append(Paragraph("Explicacion y recomendaciones", styles['Heading2']))
-            elements.append(Spacer(1, 6))
             if exp_lines_pdf2:
-                items = [
-                    ListItem(Paragraph(line, styles['Normal']), leftIndent=12, bulletColor=colors.HexColor("#2c3e50"))
+                exp_items = [
+                    ListItem(Paragraph(line, styles['Normal']), bulletColor=colors.HexColor("#1a2c42"))
                     for line in exp_lines_pdf2
                 ]
-                elements.append(ListFlowable(items, bulletType="bullet", start="•", spaceBefore=0, spaceAfter=6))
-            elements.append(Spacer(1, 12))
+                exp_card = _pdf_card(
+                    [
+                        Paragraph("Explicación y recomendaciones", styles['CardTitle']),
+                        ListFlowable(exp_items, bulletType="bullet", start="•", leftIndent=12),
+                    ],
+                    accent_color,
+                    background="#fdfdff",
+                )
+                elements.append(exp_card)
+                elements.append(Spacer(1, 14))
 
-            
-
-            elements.append(Paragraph("Reporte de Análisis de Vibraciones", title_style))
-            elements.append(Spacer(1, 8))
-            elements.append(Paragraph(f"Archivo: {base_name}", styles['Normal']))
-            elements.append(Spacer(1, 4))
-            elements.append(Paragraph(f"Periodo: {start_t:.2f}s - {end_t:.2f}s", styles['Normal']))
-            elements.append(Spacer(1, 12))
-
-            # Top picos (FFT)
-            if top_peaks:
-                elements.append(Paragraph("Picos principales (FFT)", styles['Heading2']))
-                elements.append(Spacer(1, 6))
-                peaks_data = [[f"Frecuencia ({freq_unit})", "Amplitud (mm/s)", "Orden (X)"]]
-                for pf, pa, order in top_peaks:
-                    peaks_data.append([
-                        f"{pf / freq_scale:.2f}",
-                        f"{pa:.3f}",
-                        f"{order:.2f}" if order else "-",
-                    ])
-                tbl_peaks = Table(peaks_data, colWidths=[120, 140, 120])
-                self._apply_table_style(tbl_peaks)
-                elements.append(tbl_peaks)
-                elements.append(Spacer(1, 12))
-
-            data_summary = [
-                ["Metrica", "Valor"],
-                ["RMS velocidad global", f"{rms_mm:.3f} mm/s"],
-                ["Clasificacion ISO global", primary_label_pdf],
+            diagnostic_card = _pdf_card(
                 [
-                    "Frecuencia dominante",
-                    f"{features_full['dom_freq'] / freq_scale:.2f} {freq_unit}",
+                    Paragraph("Diagnóstico consolidado", styles['CardTitle']),
+                    Paragraph(
+                        f"El valor RMS calculado es <b>{rms_mm:.3f} mm/s</b>, lo que corresponde a la condición <b>{severity_mm}</b>.",
+                        styles['Normal'],
+                    ),
                 ],
-            ]
-            for entry in axis_summaries_pdf:
-                if entry.get("is_global"):
-                    continue
-                try:
-                    axis_rms_txt = f"{float(entry.get('rms_mm_s', 0.0)):.3f} mm/s"
-                except Exception:
-                    axis_rms_txt = "N/D"
-                data_summary.append([
-                    f"RMS {entry.get('name', 'Eje')}",
-                    f"{axis_rms_txt} → {entry.get('iso_label', 'N/D')}"
-                ])
-            table_summary = Table(data_summary, colWidths=[200, 200])
-            self._apply_table_style(table_summary)
-            elements.append(table_summary)
-            elements.append(Spacer(1, 16))
+                accent_color,
+                background="#ffffff",
+            )
+            elements.append(diagnostic_card)
+            elements.append(Spacer(1, 14))
 
-            doc.build(elements)
+            ml_status_pdf = ml_result_pdf.get('status') if isinstance(ml_result_pdf, dict) else None
+            if ml_status_pdf:
+                ml_card_body: List[Any] = [Paragraph("Diagnóstico por Machine Learning", styles['CardTitle'])]
+                ml_message = None
+                accent_hex_value = "#1f77b4"
+                try:
+                    if accent_color:
+                        hv = accent_color.hexval() if callable(getattr(accent_color, "hexval", None)) else None
+                        if isinstance(hv, str):
+                            accent_hex_value = hv.replace("0x", "#") if hv.startswith("0x") else hv
+                except Exception:
+                    accent_hex_value = "#1f77b4"
+                if ml_status_pdf == 'ok':
+                    ml_label = str(ml_result_pdf.get('label', ''))
+                    ml_card_body.append(Paragraph(f"Resultado sugerido: <b>{ml_label}</b>", styles['Normal']))
+                    ml_card_body.append(Spacer(1, 4))
+                    ml_card_body.append(Paragraph("Características evaluadas", styles['Muted']))
+                    ml_features_pdf = (ml_bundle_pdf or {}).get('features') or {}
+                    feature_metrics = [
+                        ("RMS velocidad", f"{ml_features_pdf.get('rms_vel_mm_s', 0.0):.3f} mm/s"),
+                        ("Frecuencia dominante", f"{ml_features_pdf.get('dom_freq_hz', 0.0):.2f} Hz"),
+                        ("Relación 2X", f"{ml_features_pdf.get('r2x', 0.0):.2f}"),
+                        ("Energía alta", f"{ml_features_pdf.get('energy_high', 0.0) * 100:.1f}%"),
+                    ]
+                    ml_card_body.append(_pdf_metric_grid(feature_metrics, accent_color))
+                    classes = list(ml_result_pdf.get('classes') or [])
+                    probabilities = list(ml_result_pdf.get('probabilities') or [])
+                    if classes and probabilities and len(classes) == len(probabilities):
+                        ranked = sorted(zip(classes, probabilities), key=lambda x: x[1], reverse=True)
+                        proba_rows: List[List[Any]] = []
+                        for cls, prob in ranked:
+                            proba_rows.append([
+                                Paragraph(f"<b>{str(cls)}</b>", styles['Normal']),
+                                ProbabilityBar(float(prob), fill_color=accent_hex_value, back_color="#eaf3ff"),
+                                Paragraph(f"{float(prob) * 100:.1f}%", styles['Normal']),
+                            ])
+                        proba_tbl = Table(proba_rows, colWidths=[doc.width * 0.32, doc.width * 0.28, doc.width * 0.2])
+                        proba_tbl.setStyle(
+                            TableStyle(
+                                [
+                                    ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d7d7d7")),
+                                ]
+                            )
+                        )
+                        ml_card_body.append(Spacer(1, 6))
+                        ml_card_body.append(Paragraph("Probabilidades por clase", styles['Muted']))
+                        ml_card_body.append(proba_tbl)
+                else:
+                    ml_message = ml_result_pdf.get('message') or "No se pudo obtener el diagnóstico automático."
+                if ml_message:
+                    ml_card_body.append(Paragraph(ml_message, styles['Muted']))
+                elements.append(_pdf_card(ml_card_body, accent_color, background="#ffffff"))
+                elements.append(Spacer(1, 16))
+
+            chart_sections: List[Tuple[str, str, Optional[str]]] = [
+                ("Señal en el dominio del tiempo", _rms_text, img_time),
+                ("Espectro de velocidad", "Componentes en mm/s", img_fft),
+                ("Espectro de envolvente", "Análisis de fallas de rodamientos", img_env),
+                ("Mapa run-up 3D", "Evolución espectral durante aceleración", img_runup),
+                ("Órbita", "Trayectoria XY del rotor", img_orbit),
+            ]
+            visual_cards = [
+                _build_visual_card(title, subtitle or "", path)
+                for title, subtitle, path in chart_sections
+                if path
+            ]
+            if visual_cards:
+                elements.append(PageBreak())
+                elements.append(Paragraph("Visualizaciones destacadas", styles['SectionHeading']))
+                elements.append(Spacer(1, 10))
+                for card in visual_cards:
+                    elements.append(card)
+                    elements.append(Spacer(1, 14))
+
+            if aux_imgs:
+                elements.append(Paragraph("Variables auxiliares", styles['SectionHeading']))
+                elements.append(Spacer(1, 8))
+                for idx, img in enumerate(aux_imgs, 1):
+                    aux_card = _build_visual_card(f"Canal auxiliar {idx}", "", img, height=200.0)
+                    elements.append(aux_card)
+                    elements.append(Spacer(1, 12))
+
+            if charlotte_catalog_pdf:
+                elements.append(PageBreak())
+                elements.append(Paragraph("Referencia Tabla de Charlotte (Motores eléctricos)", styles['SectionHeading']))
+                charlotte_table = _build_charlotte_reference_table(
+                    charlotte_catalog_pdf, styles, accent_color, doc.width - 60
+                )
+                if charlotte_table is not None:
+                    elements.append(
+                        _pdf_card([
+                            Paragraph("Modos de falla y descripción", styles['CardTitle']),
+                            charlotte_table,
+                        ], accent_color, background="#ffffff")
+                    )
+                    elements.append(Spacer(1, 16))
+
+            doc.build(elements, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
 
             if not hasattr(self, "generated_reports"):
                 self.generated_reports = []
@@ -4774,691 +5047,10 @@ class MainApp:
         - Tablas y diagnóstico (reglas baseline)
 
         """
-        # Legacy wrapper: delega al exportador unificado
         try:
             return self.exportar_pdf(e)
-        except Exception:
-            pass
-
-        try:
-
-            if self.current_df is None:
-
-                self._log("No hay datos para exportar")
-
-                return
-
-
-
-            reports_dir = os.path.join(os.getcwd(), "reports")
-
-            os.makedirs(reports_dir, exist_ok=True)
-
-
-
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-            base_name = os.path.splitext(os.path.basename(self.uploaded_files[0]))[0]
-
-            pdf_name = f"{timestamp}_{base_name}.pdf"
-
-            pdf_path = os.path.join(reports_dir, pdf_name)
-
-
-
-            # --- Estilo claro solo para PDF ---
-
-            plt.style.use("seaborn-v0_8-whitegrid")
-            plt.rcParams["font.family"] = "DejaVu Sans"
-
-
-
-            # Preparar análisis
-
-            time_col = self.time_dropdown.value
-
-            fft_signal_col = self.fft_dropdown.value
-
-            t = self.current_df[time_col].to_numpy()
-
-            signal = self.current_df[fft_signal_col].to_numpy()
-
-
-
-            # Periodo seleccionado
-
-            mask, start_t, end_t = self._resolve_analysis_period(t)
-            if mask.size == 0 or np.count_nonzero(mask) < 2:
-                mask = np.isfinite(np.asarray(t, dtype=float))
-                start_t = float(np.nanmin(t[mask])) if np.any(mask) else 0.0
-                end_t = float(np.nanmax(t[mask])) if np.any(mask) else 0.0
-            segment_idx = np.nonzero(mask)[0]
-            t_seg_raw = t[segment_idx]
-            sig_seg_raw = signal[segment_idx]
-            segment_df = self.current_df.iloc[segment_idx]
-            t_seg, acc_seg, _, _ = self._prepare_segment_for_analysis(t_seg_raw, sig_seg_raw, fft_signal_col)
-
-
-
-            # FFT -> velocidad (mm/s y m/s)
-            xf, mag_vel_mm, mag_vel = self._compute_fft_dual(acc_seg, t_seg)
-            vel_time_mm = self._acc_to_vel_time_mm(acc_seg, t_seg)
-            if vel_time_mm.size:
-                rms_mm = float(np.sqrt(np.mean(vel_time_mm**2)))
-                rms_ms = rms_mm / 1000.0
-            else:
-                rms_mm = 0.0
-                rms_ms = 0.0
-            severity_mm = self._classify_severity(rms_mm)
-            severity_label_ms, severity_color_ms = self._classify_severity_ms(rms_ms)
-
-            # --- Features + diagnóstico para el PDF (usa mm/s) ---
-            features_full = self._extract_features(t_seg, acc_seg, xf, mag_vel_mm)
-            # Guardar última FFT/segmento para diagnóstico avanzado (PDF)
-            self._last_xf = xf
-            self._last_spec = mag_vel_mm
-            self._last_tseg = t_seg
-            self._last_accseg = acc_seg
-            findings_pdf = res.get('diagnosis', [])
-            severity_entry_pdf = res.get('diagnosis_summary')
-            findings_core_pdf = list(res.get('diagnosis_findings', []) or [])
-            if not findings_core_pdf and findings_pdf:
-                _, findings_core_pdf = _split_diagnosis(findings_pdf)
-            charlotte_catalog_pdf = list(res.get('charlotte_catalog', []) or [])
-            if not charlotte_catalog_pdf:
-                charlotte_catalog_pdf = [dict(entry) for entry in CHARLOTTE_MOTOR_FAULTS]
-
-
-            # Guardar gráficas como imágenes
-
-            tmp_imgs: List[str] = []
-
-
-
-            try:
-                unit_mode = getattr(self.time_unit_dd, 'value', 'vel_mm')
-            except Exception:
-                unit_mode = 'vel_mm'
-            if unit_mode == 'vel_mm':
-                _y_time = self._acc_to_vel_time_mm(acc_seg, t_seg)
-                _ylabel = 'Velocidad [mm/s]'
-                _rms_text = f"RMS vel: {self._calculate_rms(_y_time):.3f} mm/s" if _y_time.size else 'RMS vel: 0.000 mm/s'
-            elif unit_mode == 'acc_g':
-                _y_time = acc_seg / 9.80665
-                _ylabel = 'Aceleración [g]'
-                _rms_text = f"RMS acc: {self._calculate_rms(_y_time):.3f} g"
-            else:
-                _y_time = acc_seg
-                _ylabel = 'Aceleración [m/s²]'
-                _rms_text = f"RMS acc: {self._calculate_rms(_y_time):.3e} m/s^2"
-
-            # Señal principal
-            fig1, ax1 = plt.subplots(figsize=(8, 3))
-            if len(t_seg) > 0 and len(_y_time) > 0:
-                ax1.plot(t_seg, _y_time, color=self.time_plot_color)
-            ax1.set_title(f"Señal {fft_signal_col} ({start_t:.2f}-{end_t:.2f}s)")
-            ax1.set_xlabel("Tiempo (s)")
-            ax1.set_ylabel(_ylabel)
-            try:
-                text_color = 'white' if self.is_dark_mode else 'black'
-                ax1.text(0.02, 0.95, _rms_text, transform=ax1.transAxes, va='top', color=text_color)
-            except Exception:
-                pass
-            img_time = self._save_temp_plot(fig1, tmp_imgs)
-
-            fig2, ax2 = plt.subplots(figsize=(8, 3))
-            freq_scale = getattr(self, "_fft_display_scale", 1.0) or 1.0
-            if not np.isfinite(freq_scale) or freq_scale <= 0:
-                freq_scale = 1.0
-            freq_unit = getattr(self, "_fft_display_unit", "Hz") or "Hz"
-            if xf is not None and mag_vel_mm is not None:
-                xdisp = np.asarray(xf, dtype=float) / freq_scale
-                ax2.plot(xdisp, mag_vel_mm, color=self.fft_plot_color)
-            ax2.set_title(f"FFT (Velocidad)")
-            ax2.set_xlabel(f"Frecuencia ({freq_unit})")
-            ax2.set_ylabel("Velocidad [mm/s]")
-            # Anotación RMS (m/s) y eje superior en RPM
-            try:
-                text_color = "white" if self.is_dark_mode else "black"
-                ax2.text(0.02, 0.95, f"RMS vel: {rms_mm:.3f} mm/s", transform=ax2.transAxes,
-                         va="top", color=text_color)
-                ax2_rpm = ax2.twiny()
-                xlim = ax2.get_xlim()
-                ax2_rpm.set_xlim(xlim[0] * freq_scale * 60, xlim[1] * freq_scale * 60)
-                ax2_rpm.set_xlabel("Frecuencia (RPM)")
-            except Exception:
-                pass
-            # Eje superior en RPM
-            try:
-                ax2_rpm = ax2.twiny()
-                xlim = ax2.get_xlim()
-                ax2_rpm.set_xlim(xlim[0] * freq_scale * 60, xlim[1] * freq_scale * 60)
-                ax2_rpm.set_xlabel("Frecuencia (RPM)")
-            except Exception:
-                pass
-            img_fft = self._save_temp_plot(fig2, tmp_imgs)
-
-
-            # Variables auxiliares (si las hay marcadas)
-
-            aux_selected = [(cb.label, color_dd.value, style_dd.value)
-
-                            for cb, color_dd, style_dd in self.aux_controls if cb.value]
-
-
-
-            aux_imgs = []
-
-            for col, color, style in aux_selected:
-
-                aux_fig, aux_ax = plt.subplots(figsize=(8, 2))
-
-                aux_ax.plot(self.current_df[time_col], self.current_df[col],
-
-                            color=color, linestyle=style, linewidth=2, label=col)
-
-                aux_ax.set_title(f"{col} vs Tiempo")
-
-                aux_ax.legend()
-
-                aux_ax.set_xlabel("Tiempo (s)")
-
-                aux_ax.set_ylabel(col)
-
-                aux_imgs.append(self._save_temp_plot(aux_fig, tmp_imgs))
-
-
-
-            # Crear PDF
-
-            doc = SimpleDocTemplate(pdf_path, pagesize=A4)
-
-            styles = getSampleStyleSheet()
-            try:
-                accent_hex = self._accent_hex()
-            except Exception:
-                accent_hex = "#1f77b4"
-            try:
-                accent_color = colors.HexColor(accent_hex)
-            except Exception:
-                accent_color = colors.HexColor("#1f77b4")
-            title_style = ParagraphStyle(
-                "title",
-                parent=styles['Title'],
-                textColor=accent_color,
-                spaceAfter=12,
-            )
-            styles.add(
-                ParagraphStyle(
-                    "HeadingAccent",
-                    parent=styles['Heading1'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    spaceAfter=8,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "SectionHeading",
-                    parent=styles['Heading2'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    spaceBefore=12,
-                    spaceAfter=6,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "BulletItem",
-                    parent=styles['Normal'],
-                    leftIndent=18,
-                    spaceAfter=4,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "Muted",
-                    parent=styles['Normal'],
-                    textColor=colors.HexColor("#7f8c8d"),
-                    fontSize=10,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "Chip",
-                    parent=styles['Normal'],
-                    textColor=colors.HexColor("#2c3e50"),
-                    backColor=colors.HexColor("#e6e6e6"),
-                    alignment=1,
-                    fontSize=12,
-                    leading=14,
-                    borderPadding=(4, 8, 4, 8),
-                )
-            )
-
-            generated_at = datetime.now()
-
-            def _draw_header_footer(canvas, doc_obj):
-                canvas.saveState()
-                header_height = 22
-                canvas.setFillColor(accent_color)
-                canvas.rect(0, A4[1] - header_height, A4[0], header_height, fill=1, stroke=0)
-                canvas.setFillColor(colors.white)
-                canvas.setFont("Helvetica-Bold", 11)
-                canvas.drawString(36, A4[1] - header_height + 7, "Informe de Vibraciones")
-                canvas.setFont("Helvetica", 8)
-                canvas.drawRightString(A4[0] - 36, A4[1] - header_height + 7, base_name)
-                canvas.setFillColor(colors.HexColor("#7f8c8d"))
-                canvas.setFont("Helvetica", 8)
-                canvas.drawString(36, 24, generated_at.strftime("%d/%m/%Y %H:%M"))
-                canvas.drawRightString(A4[0] - 36, 24, f"Página {doc_obj.page}")
-                canvas.restoreState()
-
-            def _chunk_list(seq, size):
-                for i in range(0, len(seq), size):
-                    yield seq[i : i + size]
-
-            styles.add(
-                ParagraphStyle(
-                    "CoverHeading",
-                    parent=styles["Heading1"],
-                    fontSize=26,
-                    leading=30,
-                    textColor=colors.white,
-                    spaceAfter=4,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "CoverSubtitle",
-                    parent=styles["Normal"],
-                    fontSize=12,
-                    textColor=colors.white,
-                    spaceAfter=2,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "MetaLabel",
-                    parent=styles["Normal"],
-                    textColor=colors.HexColor("#6c7a89"),
-                    fontSize=10,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "MetaValue",
-                    parent=styles["Heading3"],
-                    textColor=colors.HexColor("#2c3e50"),
-                    fontSize=12,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "CardTitle",
-                    parent=styles["Heading3"],
-                    textColor=colors.HexColor("#2c3e50"),
-                    fontSize=12,
-                    spaceAfter=2,
-                )
-            )
-            styles.add(
-                ParagraphStyle(
-                    "CardValue",
-                    parent=styles["Title"],
-                    textColor=accent_color,
-                    fontSize=16,
-                    spaceAfter=4,
-                )
-            )
-
-            elements: List[Any] = []
-            cover_banner = Table(
-                [
-                    [Paragraph("Informe de Análisis de Vibraciones", styles["CoverHeading"])],
-                    [Paragraph(f"Archivo: <b>{base_name}</b>", styles["CoverSubtitle"])],
-                    [Paragraph(f"Periodo analizado: {start_t:.2f}s – {end_t:.2f}s", styles["CoverSubtitle"])],
-                ],
-                colWidths=[doc.width],
-            )
-            cover_banner.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, -1), accent_color),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 32),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 32),
-                        ("TOPPADDING", (0, 0), (-1, -1), 32),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 28),
-                    ]
-                )
-            )
-            elements.append(cover_banner)
-            elements.append(Spacer(1, 12))
-
-            meta_rows = [
-                [Paragraph("Generado el", styles["MetaLabel"]), Paragraph(generated_at.strftime("%d/%m/%Y %H:%M"), styles["MetaValue"])],
-                [Paragraph("Duración analizada", styles["MetaLabel"]), Paragraph(f"{(end_t - start_t):.2f} s", styles["MetaValue"])],
-                [Paragraph("Ventana FFT", styles["MetaLabel"]), Paragraph(self.fft_window_type.upper(), styles["MetaValue"])],
-            ]
-            meta_table = Table(meta_rows, colWidths=[doc.width * 0.35, doc.width * 0.65])
-            meta_table.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f7fa")),
-                        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d5dde5")),
-                        ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#e3e9ee")),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-                        ("TOPPADDING", (0, 0), (-1, -1), 8),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                    ]
-                )
-            )
-            elements.append(meta_table)
-            elements.append(Spacer(1, 14))
-
-            summary_cards = [
-                _pdf_card(
-                    [
-                        Paragraph("RMS global", styles["CardTitle"]),
-                        Paragraph(f"{primary_rms_mm_pdf:.3f} mm/s", styles["CardValue"]),
-                        Paragraph(severity_mm, styles["Muted"]),
-                    ],
-                    accent_color,
-                    background="#ffffff",
-                ),
-                _pdf_card(
-                    [
-                        Paragraph("Frecuencia dominante", styles["CardTitle"]),
-                        Paragraph(f"{dom_freq:.2f} Hz", styles["CardValue"]),
-                        Paragraph("Máximo espectral del análisis", styles["Muted"]),
-                    ],
-                    accent_color,
-                    background="#ffffff",
-                ),
-                _pdf_card(
-                    [
-                        Paragraph("Ventana FFT", styles["CardTitle"]),
-                        Paragraph(self.fft_window_type.upper(), styles["CardValue"]),
-                        Paragraph("Configuración actual", styles["Muted"]),
-                    ],
-                    accent_color,
-                    background="#ffffff",
-                ),
-            ]
-            summary_table = Table([summary_cards], colWidths=[doc.width / 3.0] * 3, hAlign="CENTER")
-            summary_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-            elements.append(summary_table)
-            elements.append(Spacer(1, 14))
-
-            axis_table_rows: List[List[str]] = []
-            if axis_summaries_pdf:
-                axis_table_rows.append(["Canal", "RMS (mm/s)", "Clasificación ISO"])
-                for entry in axis_summaries_pdf:
-                    try:
-                        rms_txt = f"{float(entry.get('rms_mm_s', 0.0)):.3f}"
-                    except Exception:
-                        rms_txt = "N/D"
-                    axis_table_rows.append(
-                        [
-                            entry.get("name", "Eje"),
-                            rms_txt,
-                            entry.get("iso_label", "N/D"),
-                        ]
-                    )
-
-            elements.append(Paragraph("Resumen ejecutivo", styles["SectionHeading"]))
-            exec_findings_all2 = list(findings_core_pdf)
-            exec_findings = self._select_main_findings(exec_findings_all2)
-            if not exec_findings:
-                exec_findings = ["Sin anomalías evidentes según reglas actuales."]
-            summary_card = _pdf_card(
-                [
-                    Paragraph(f"Clasificación ISO global: <b>{severity_mm}</b>", styles["Normal"]),
-                    Paragraph(f"RMS velocidad global: <b>{rms_mm:.3f} mm/s</b>", styles["Normal"]),
-                    Paragraph(f"Frecuencia dominante: <b>{features_full['dom_freq']:.2f} Hz</b>", styles["Normal"]),
-                ],
-                accent_color,
-                background="#f9f9fb",
-            )
-            elements.append(summary_card)
-
-            balance_rows = []
-            frac_low_pdf2 = float(features_full.get("frac_low", 0.0))
-            frac_mid_pdf2 = float(features_full.get("frac_mid", 0.0))
-            frac_high_pdf2 = float(features_full.get("frac_high", 0.0))
-            if (frac_low_pdf2 + frac_mid_pdf2 + frac_high_pdf2) > 0:
-                balance_rows = [
-                    ["Baja (0-30 Hz)", f"{frac_low_pdf2 * 100:.1f}%"],
-                    ["Media (30-120 Hz)", f"{frac_mid_pdf2 * 100:.1f}%"],
-                    ["Alta (>120 Hz)", f"{frac_high_pdf2 * 100:.1f}%"],
-                ]
-            if balance_rows:
-                balance_table = Table(balance_rows, colWidths=[doc.width * 0.45, doc.width * 0.45])
-                balance_table.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
-                            ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#d7d7d7")),
-                            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#d0d0d0")),
-                            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                            ("TOPPADDING", (0, 0), (-1, -1), 4),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ]
-                    )
-                )
-                elements.append(Spacer(1, 10))
-                elements.append(balance_table)
-
-            elements.append(Spacer(1, 12))
-            elements.append(Paragraph("Hallazgos principales", styles["SectionHeading"]))
-            finding_bullets = [
-                ListItem(Paragraph(text, styles["Normal"]), bulletColor=colors.HexColor("#2c3e50"))
-                for text in exec_findings
-            ]
-            elements.append(
-                ListFlowable(
-                    finding_bullets,
-                    bulletType="bullet",
-                    bulletColor=colors.HexColor("#2c3e50"),
-                    start="bulletchar",
-                    leftIndent=16,
-                )
-            )
-
-            if axis_table_rows:
-                elements.append(Spacer(1, 14))
-                elements.append(Paragraph("Detalle por canal", styles["SectionHeading"]))
-                axis_table = Table(axis_table_rows, colWidths=[doc.width * 0.35, doc.width * 0.25, doc.width * 0.4])
-                axis_table.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), accent_color),
-                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                            ("TOPPADDING", (0, 0), (-1, -1), 6),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#d7d7d7")),
-                        ]
-                    )
-                )
-                elements.append(axis_table)
-
-            chart_paths = [img for img in [img_time, img_fft, img_env, img_runup, img_orbit] if img]
-            if chart_paths:
-                elements.append(PageBreak())
-                elements.append(Paragraph("Visualizaciones principales", styles["SectionHeading"]))
-                chart_rows = []
-                for chunk in _chunk_list(chart_paths, 2):
-                    row = []
-                    for img in chunk:
-                        row.append(Image(img, width=(doc.width / 2) - 6, height=210))
-                    if len(row) == 1:
-                        row.append(Spacer(1, 0))
-                    chart_rows.append(row)
-                charts_table = Table(chart_rows, colWidths=[doc.width / 2, doc.width / 2], hAlign="CENTER")
-                charts_table.setStyle(
-                    TableStyle(
-                        [
-                            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
-                        ]
-                    )
-                )
-                elements.append(charts_table)
-                elements.append(Spacer(1, 14))
-
-            if aux_imgs:
-                elements.append(Paragraph("Variables auxiliares", styles["SectionHeading"]))
-                aux_rows = []
-                for chunk in _chunk_list(aux_imgs, 2):
-                    row = []
-                    for img in chunk:
-                        row.append(Image(img, width=(doc.width / 2) - 6, height=180))
-                    if len(row) == 1:
-                        row.append(Spacer(1, 0))
-                    aux_rows.append(row)
-                aux_table_img = Table(aux_rows, colWidths=[doc.width / 2, doc.width / 2], hAlign="CENTER")
-                aux_table_img.setStyle(
-                    TableStyle(
-                        [
-                            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-                        ]
-                    )
-                )
-                elements.append(aux_table_img)
-
-            elements.append(Spacer(1, 12))
-            diagnostic_card = _pdf_card(
-                [
-                    Paragraph(
-                        f"El valor RMS calculado es <b>{rms_mm:.3f} mm/s</b>, lo cual corresponde a la condición <b>{severity_mm}</b>.",
-                        styles["Normal"],
-                    )
-                ],
-                accent_color,
-                background="#ffffff",
-            )
-            elements.append(Paragraph("Diagnóstico consolidado", styles["SectionHeading"]))
-            elements.append(diagnostic_card)
-
-
-
-            ml_status_pdf = ml_result_pdf.get('status') if isinstance(ml_result_pdf, dict) else None
-            if ml_status_pdf:
-                elements.append(Spacer(1, 12))
-                ml_card_body: List[Any] = [Paragraph("Diagnóstico por Machine Learning", styles['HeadingAccent'])]
-                ml_message = None
-                accent_hex_value = "#1f77b4"
-                try:
-                    if accent_color:
-                        hv = accent_color.hexval() if callable(getattr(accent_color, "hexval", None)) else None
-                        if isinstance(hv, str):
-                            accent_hex_value = hv.replace("0x", "#") if hv.startswith("0x") else hv
-                except Exception:
-                    accent_hex_value = "#1f77b4"
-                if ml_status_pdf == 'ok':
-                    ml_label = str(ml_result_pdf.get('label', ''))
-                    ml_card_body.append(Paragraph(f"Resultado sugerido: {ml_label}", styles['Chip']))
-                    ml_card_body.append(Spacer(1, 6))
-                    ml_card_body.append(Paragraph("Características principales evaluadas:", styles['Muted']))
-                    ml_features_pdf = (ml_bundle_pdf or {}).get('features') or {}
-                    feature_metrics = [
-                        ("RMS velocidad", f"{ml_features_pdf.get('rms_vel_mm_s', 0.0):.3f} mm/s"),
-                        ("Frecuencia dominante", f"{ml_features_pdf.get('dom_freq_hz', 0.0):.2f} Hz"),
-                        ("Relación 2X", f"{ml_features_pdf.get('r2x', 0.0):.2f}"),
-                        ("Energía alta", f"{ml_features_pdf.get('energy_high', 0.0) * 100:.1f}%"),
-                    ]
-                    ml_card_body.append(_pdf_metric_grid(feature_metrics, accent_color))
-                    classes = list(ml_result_pdf.get('classes') or [])
-                    probabilities = list(ml_result_pdf.get('probabilities') or [])
-                    if classes and probabilities and len(classes) == len(probabilities):
-                        ranked = sorted(zip(classes, probabilities), key=lambda x: x[1], reverse=True)
-                        proba_rows: List[List[Any]] = []
-                        for cls, prob in ranked:
-                            proba_rows.append([
-                                Paragraph(f"<b>{str(cls)}</b>", styles['Normal']),
-                                ProbabilityBar(float(prob), fill_color=accent_hex_value, back_color="#eaf3ff"),
-                                Paragraph(f"{float(prob) * 100:.1f}%", styles['Normal']),
-                            ])
-                        proba_tbl = Table(proba_rows, colWidths=[200, 150, 90])
-                        proba_tbl.setStyle(
-                            TableStyle(
-                                [
-                                    ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d7d7d7")),
-                                ]
-                            )
-                        )
-                        ml_card_body.append(Spacer(1, 6))
-                        ml_card_body.append(Paragraph("Probabilidades por clase:", styles['Muted']))
-                        ml_card_body.append(proba_tbl)
-                else:
-                    ml_message = ml_result_pdf.get('message') or "No se pudo obtener el diagnóstico automático."
-                if ml_message:
-                    ml_card_body.append(Paragraph(ml_message, styles['Muted']))
-                elements.append(_pdf_card(ml_card_body, accent_color, background="#ffffff"))
-
-            if charlotte_catalog_pdf:
-                elements.append(PageBreak())
-                elements.append(Paragraph("Referencia Tabla de Charlotte (Motores eléctricos)", styles['SectionHeading']))
-                charlotte_table = _build_charlotte_reference_table(
-                    charlotte_catalog_pdf, styles, accent_color, doc.width
-                )
-                if charlotte_table is not None:
-                    elements.append(charlotte_table)
-                    elements.append(Spacer(1, 16))
-
-            doc.build(elements)
-
-
-
-            # Restaurar estilo de la app
-
-            if self.is_dark_mode:
-
-                plt.style.use("dark_background")
-
-            else:
-
-                plt.style.use("seaborn-v0_8-whitegrid")
-
-
-
-            if not hasattr(self, "generated_reports"):
-
-                self.generated_reports = []
-
-            self.generated_reports.append(pdf_path)
-
-
-
-            self._log(f"Reporte exportado: {pdf_path}")
-
-            self.page.snack_bar = ft.SnackBar(content=ft.Text(f"✅ Reporte PDF generado: {pdf_name}"), action="OK")
-
-            self.page.snack_bar.open = True
-
-            self.page.update()
-            try:
-                self._refresh_report_list()
-            except Exception:
-                pass
-
-
-
-        except Exception as ex:
-
-            self._log(f"Error exportando PDF: {ex}")
-
+        except Exception as exc:
+            self._log(f"Error exportando PDF (legacy): {exc}")
 
 
     def _build_analysis_view(self):
