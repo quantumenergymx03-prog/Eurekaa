@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from flet.matplotlib_chart import MatplotlibChart
 from flet.plotly_chart import PlotlyChart
 import numpy as np
+import gc
 from datetime import datetime
 import matplotlib
 import re
@@ -803,7 +804,6 @@ def analyze_vibration(
        # ============================================================
     # 🚨 Aislar sesión de análisis y limpiar caché numérico
     # ============================================================
-    import numpy as np, gc
     np.seterr(all="ignore")
     gc.collect()
 
