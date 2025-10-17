@@ -425,12 +425,15 @@ def _build_charlotte_reference_table(
         table_width = float(table_width)
     except Exception:
         table_width = 450.0
+    max_width = A4[0] - 2 * 36 - 24
+    table_width = max(360.0, min(table_width, max_width))
     col_widths = [
-        table_width * 0.16,
-        table_width * 0.28,
-        table_width * 0.56,
+        table_width * 0.18,
+        table_width * 0.30,
+        table_width * 0.52,
     ]
     table = Table(rows, colWidths=col_widths)
+    table.hAlign = "LEFT"
     table.setStyle(
         TableStyle(
             [
@@ -440,8 +443,8 @@ def _build_charlotte_reference_table(
                 ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("WORDWRAP", (0, 1), (-1, -1), "CJK"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d7d7d7")),
@@ -3180,6 +3183,7 @@ class MainApp:
             )
             ml_bundle_pdf = res.get('ml', {})
             ml_result_pdf = (ml_bundle_pdf or {}).get('result') or {}
+            ml_features_bundle = (ml_bundle_pdf or {}).get('features') or {}
             xf = res['fft']['f_hz']
             mag_vel_mm = res['fft']['vel_spec_mm_s']
             selected_rms_mm = res['severity']['rms_mm_s']
@@ -3253,6 +3257,8 @@ class MainApp:
             primary_rms_mm_pdf = float(primary_entry_pdf.get("rms_mm_s", selected_rms_mm))
             primary_label_pdf = primary_entry_pdf.get("iso_label", selected_label)
             primary_color_pdf = primary_entry_pdf.get("color", selected_color)
+            axis_display_name = self._axis_display_name(fft_signal_col)
+
             features_full = self._extract_features(t_seg, acc_seg, xf, mag_vel_mm) if xf is not None else {
                 "dom_freq": 0.0, "crest": 0.0, "rms_time_acc": 0.0, "peak_acc": 0.0, "pp_acc": 0.0,
                 "e_low": 0.0, "e_mid": 0.0, "e_high": 0.0, "e_total": 1e-12, "r2x": 0.0, "r3x": 0.0
@@ -3309,7 +3315,7 @@ class MainApp:
             fig1, ax1 = plt.subplots(figsize=(8, 3))
             if len(t_seg) > 0 and len(_y_time) > 0:
                 ax1.plot(t_seg, _y_time, color=self.time_plot_color)
-            ax1.set_title(f"Señal {fft_signal_col} ({start_t:.2f}-{end_t:.2f}s)")
+            ax1.set_title(f"Vibración temporal – {axis_display_name} ({start_t:.2f}-{end_t:.2f}s)")
             ax1.set_xlabel("Tiempo (s)")
             ax1.set_ylabel(_ylabel)
 
@@ -3428,7 +3434,7 @@ class MainApp:
                     self._draw_frequency_markers(ax2, visible_marks, zoom_scaled)
                 except Exception:
                     pass
-            ax2.set_title(f"FFT (Velocidad)")
+            ax2.set_title("Espectro de velocidad (mm/s)")
             ax2.set_xlabel(f"Frecuencia ({freq_unit})")
             ax2.set_ylabel("Velocidad [mm/s]")
             try:
@@ -3461,7 +3467,7 @@ class MainApp:
                     env_fig, env_ax = plt.subplots(figsize=(8, 3))
                     xenv_disp = np.asarray(xenv, dtype=float) / freq_scale if xenv is not None else xenv
                     env_ax.plot(xenv_disp, yenv, color="#e67e22", linewidth=1.6)
-                    env_ax.set_title("Espectro de Envolvente")
+                    env_ax.set_title("Espectro de envolvente – energía de rodamientos")
                     env_ax.set_xlabel(f"Frecuencia ({freq_unit})")
                     env_ax.set_ylabel("Amp [a.u.]")
                     try:
@@ -3489,9 +3495,14 @@ class MainApp:
                             pfx, pfy = zip(*[(f0, a0) for f0, a0, _ in env_visible_peaks])
                             pfx_disp = [float(f0) / freq_scale for f0 in pfx]
                             env_ax.scatter(pfx_disp, pfy, color="#c0392b", s=36, zorder=5, edgecolors="white", linewidths=0.6)
-                            peak_points = [(float(f0) / freq_scale, float(a0)) for f0, a0, _ in env_visible_peaks]
-                            peak_labels = [f"{float(f0) / freq_scale:.2f} {freq_unit} | {a0:.3f} a.u." for f0, a0, _ in env_visible_peaks]
-                            self._place_annotations(env_ax, peak_points, peak_labels, color="#c0392b", text_color="#c0392b")
+                            ranked_peaks = sorted(env_visible_peaks, key=lambda item: (item[2], item[1]), reverse=True)
+                            top_annotations = ranked_peaks[:6]
+                            ann_points = [(float(f0) / freq_scale, float(a0)) for f0, a0, _ in top_annotations]
+                            ann_labels = [
+                                f"{float(f0) / freq_scale:.2f} {freq_unit} | {float(a0):.3f} a.u."
+                                for f0, a0, _ in top_annotations
+                            ]
+                            self._place_annotations(env_ax, ann_points, ann_labels, color="#c0392b", text_color="#c0392b")
                     except Exception:
                         pass
                     try:
@@ -3620,7 +3631,7 @@ class MainApp:
                 if col in self.current_df.columns:
                     aux_fig, aux_ax = plt.subplots(figsize=(8, 2))
                     aux_ax.plot(self.current_df[time_col], self.current_df[col], color=color, linestyle=style, linewidth=2, label=col)
-                    aux_ax.set_title(f"{col} vs Tiempo")
+                    aux_ax.set_title(f"{col} – evolución temporal")
                     aux_ax.legend()
                     aux_ax.set_xlabel("Tiempo (s)")
                     aux_ax.set_ylabel(col)
@@ -3689,6 +3700,9 @@ class MainApp:
                         styles_cmd.append(("BOX", (i, 0), (i, 0), 0.5, colors.black))
                         styles_cmd.append(("ALIGN", (i, 0), (i, 0), "CENTER"))
                         styles_cmd.append(("ALIGN", (i, 1), (i, 1), "CENTER"))
+                        text_col = colors.white if i == idx and idx >= 0 else colors.HexColor("#1a2c42")
+                        styles_cmd.append(("TEXTCOLOR", (i, 0), (i, 0), text_col))
+                        styles_cmd.append(("TEXTCOLOR", (i, 1), (i, 1), text_col))
                     styles_cmd.append(("FONTNAME", (0, 1), (-1, 1), 'Helvetica'))
                     styles_cmd.append(("FONTSIZE", (0, 1), (-1, 1), 10))
                     styles_cmd.append(("GRID", (0, 1), (-1, 1), 0.25, colors.grey))
@@ -3821,6 +3835,46 @@ class MainApp:
                     )
                 )
                 return grid
+
+            def _build_diagnostic_comparison(rows: List[Tuple[str, str, str]]) -> Optional[Table]:
+                if not rows:
+                    return None
+                header = [
+                    Paragraph("<b>Método</b>", styles['Normal']),
+                    Paragraph("<b>Clasificación</b>", styles['Normal']),
+                    Paragraph("<b>Justificación rápida</b>", styles['Normal']),
+                ]
+                data: List[List[Any]] = [header]
+                for method, result, comment in rows:
+                    data.append(
+                        [
+                            Paragraph(str(method), styles['Normal']),
+                            Paragraph(str(result), styles['Normal']),
+                            Paragraph(str(comment), styles['Normal']),
+                        ]
+                    )
+                table = Table(data, colWidths=[doc.width * 0.28, doc.width * 0.22, doc.width * 0.44])
+                table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), accent_color),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                            ("TOPPADDING", (0, 0), (-1, -1), 6),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
+                                colors.white,
+                                _mix_colors(accent_color, colors.white, 0.85),
+                            ]),
+                            ("GRID", (0, 0), (-1, -1), 0.3, _mix_colors(accent_color, colors.white, 0.5)),
+                        ]
+                    )
+                )
+                return table
 
             def _build_visual_card(title: str, subtitle: str, image_path: str, height: float = 230.0) -> Table:
                 card_contents: List[Any] = [
@@ -4007,14 +4061,70 @@ class MainApp:
                 elements.append(exp_card)
                 elements.append(Spacer(1, 14))
 
+            try:
+                frac_high_pct = float(ml_features_bundle.get('energy_high', features_full.get('frac_high', 0.0))) * 100.0
+            except Exception:
+                frac_high_pct = float(features_full.get('frac_high', 0.0)) * 100.0
+            try:
+                ml_r2x = float(ml_features_bundle.get('r2x', features_full.get('r2x', 0.0)))
+            except Exception:
+                ml_r2x = float(features_full.get('r2x', 0.0))
+            ml_status_value = str(
+                ml_result_pdf.get('status')
+                or (ml_bundle_pdf or {}).get('status')
+                or ''
+            ).lower()
+            ml_label_display = str(ml_result_pdf.get('label', '') or "No disponible")
+            if ml_status_value != 'ok':
+                ml_label_display = "No disponible"
+            ml_comment = (
+                f"Energía >120 Hz {frac_high_pct:.1f}% y relación 2X {ml_r2x:.2f}X sin patrones críticos."
+                if ml_status_value == 'ok'
+                else "Modelo ML no disponible para esta medición."
+            )
+
+            comparison_rows = [
+                (
+                    "Norma ISO 10816/20816",
+                    f"{severity_mm} (RMS {primary_rms_mm_pdf:.3f} mm/s)",
+                    "Nivel vibratorio global supera el umbral recomendado para operación continua.",
+                ),
+                (
+                    "Modelo Machine Learning",
+                    ml_label_display,
+                    ml_comment,
+                ),
+            ]
+            comparison_table = _build_diagnostic_comparison(comparison_rows)
+            if ml_status_value == 'ok':
+                discrepancy_note = (
+                    f"Nota sobre el diagnóstico: Mientras que los niveles de vibración RMS (<b>{primary_rms_mm_pdf:.3f} mm/s</b>) "
+                    f"superan los límites de la norma ISO y ubican la condición como <b>{severity_mm}</b>, el modelo de Machine "
+                    f"Learning se apoya en rasgos como la baja energía en alta frecuencia ({frac_high_pct:.1f}%) y una relación 2X "
+                    f"de {ml_r2x:.2f}, por lo que clasifica el activo como \"{ml_label_display}\". Se recomienda priorizar el "
+                    "criterio de la norma ISO debido al riesgo energético evidente."
+                )
+            else:
+                discrepancy_note = (
+                    "Nota sobre el diagnóstico: El modelo de Machine Learning no emitió una clasificación confiable para esta "
+                    "medición, por lo que se prioriza el criterio de la norma ISO dada la energía vibratoria registrada."
+                )
+
+            diagnostic_contents: List[Any] = [
+                Paragraph("Diagnóstico consolidado", styles['CardTitle']),
+                Paragraph(
+                    f"El valor RMS calculado es <b>{rms_mm:.3f} mm/s</b>, lo que corresponde a la condición <b>{severity_mm}</b>.",
+                    styles['Normal'],
+                ),
+            ]
+            if comparison_table is not None:
+                diagnostic_contents.append(Spacer(1, 6))
+                diagnostic_contents.append(comparison_table)
+            diagnostic_contents.append(Spacer(1, 6))
+            diagnostic_contents.append(Paragraph(discrepancy_note, styles['Normal']))
+
             diagnostic_card = _pdf_card(
-                [
-                    Paragraph("Diagnóstico consolidado", styles['CardTitle']),
-                    Paragraph(
-                        f"El valor RMS calculado es <b>{rms_mm:.3f} mm/s</b>, lo que corresponde a la condición <b>{severity_mm}</b>.",
-                        styles['Normal'],
-                    ),
-                ],
+                diagnostic_contents,
                 accent_color,
                 background="#ffffff",
             )
@@ -4038,7 +4148,7 @@ class MainApp:
                     ml_card_body.append(Paragraph(f"Resultado sugerido: <b>{ml_label}</b>", styles['Normal']))
                     ml_card_body.append(Spacer(1, 4))
                     ml_card_body.append(Paragraph("Características evaluadas", styles['Muted']))
-                    ml_features_pdf = (ml_bundle_pdf or {}).get('features') or {}
+                    ml_features_pdf = dict(ml_features_bundle)
                     feature_metrics = [
                         ("RMS velocidad", f"{ml_features_pdf.get('rms_vel_mm_s', 0.0):.3f} mm/s"),
                         ("Frecuencia dominante", f"{ml_features_pdf.get('dom_freq_hz', 0.0):.2f} Hz"),
@@ -4081,11 +4191,31 @@ class MainApp:
                 elements.append(Spacer(1, 16))
 
             chart_sections: List[Tuple[str, str, Optional[str]]] = [
-                ("Señal en el dominio del tiempo", _rms_text, img_time),
-                ("Espectro de velocidad", "Componentes en mm/s", img_fft),
-                ("Espectro de envolvente", "Análisis de fallas de rodamientos", img_env),
-                ("Mapa run-up 3D", "Evolución espectral durante aceleración", img_runup),
-                ("Órbita", "Trayectoria XY del rotor", img_orbit),
+                (
+                    f"Vibración temporal – {axis_display_name}",
+                    f"{_rms_text} | Ventana {start_t:.2f}-{end_t:.2f} s",
+                    img_time,
+                ),
+                (
+                    "Espectro de velocidad",
+                    f"Componentes principales en {freq_unit}",
+                    img_fft,
+                ),
+                (
+                    "Espectro de envolvente – fallas de rodamientos",
+                    "Picos característicos filtrados",
+                    img_env,
+                ),
+                (
+                    "Mapa Run-Up 3D – evolución espectral",
+                    "Densidad energética durante aceleración",
+                    img_runup,
+                ),
+                (
+                    "Órbita del rotor",
+                    "Trayectoria XY del eje monitorizado",
+                    img_orbit,
+                ),
             ]
             visual_cards = [
                 _build_visual_card(title, subtitle or "", path)
@@ -6560,7 +6690,7 @@ class MainApp:
                     low = float(energy.get("low", 0.0)) / total
                     mid = float(energy.get("mid", 0.0)) / total
                     high = float(energy.get("high", 0.0)) / total
-                    energy_text = f"Energía espectral: baja {low:.0%}, media {mid:.0%}, alta {high:.0%}."
+                    energy_text = f"Energía espectral: baja {low:.1%}, media {mid:.1%}, alta {high:.1%}."
             except Exception:
                 energy_text = None
 
@@ -7730,8 +7860,8 @@ class MainApp:
 
             hover_precision = ".3f" if unit_mode in {"vel_mm", "acc_g"} else ".3e"
 
-            fig_time_title = "Señal en el tiempo"
-            fig_freq_title = "FFT (Velocidad)"
+            fig_time_title = "Vibración temporal"
+            fig_freq_title = "Espectro de velocidad (mm/s)"
 
             def _build_matplotlib_time_freq_chart() -> Optional[MatplotlibChart]:
                 try:
@@ -8041,7 +8171,7 @@ class MainApp:
                     env_fig, env_ax = plt.subplots(figsize=(14, 3))
                     xenv_disp = np.asarray(xenv, dtype=float) / freq_scale
                     env_ax.plot(xenv_disp, yenv, color="#e67e22", linewidth=1.6)
-                    env_ax.set_title("Espectro de Envolvente")
+                    env_ax.set_title("Espectro de envolvente – energía de rodamientos")
                     env_ax.set_xlabel(f"Frecuencia ({freq_unit})")
                     env_ax.set_ylabel("Amp [a.u.]")
                     # Picos anotados
@@ -8068,9 +8198,14 @@ class MainApp:
                             pfx, pfy = zip(*filtered)
                             pfx_disp = [float(f0) / freq_scale for f0 in pfx]
                             env_ax.scatter(pfx_disp, pfy, color="#c0392b", s=24, zorder=5)
-                            peak_points = [(float(f0) / freq_scale, float(a0)) for f0, a0 in filtered]
-                            peak_labels = [f"{float(f0) / freq_scale:.2f} {freq_unit}" for f0, _ in filtered]
-                            self._place_annotations(env_ax, peak_points, peak_labels, color="#c0392b", text_color="#c0392b")
+                            ranked = sorted(filtered, key=lambda item: item[1], reverse=True)
+                            annotated = ranked[:6]
+                            ann_points = [(float(f0) / freq_scale, float(a0)) for f0, a0 in annotated]
+                            ann_labels = [
+                                f"{float(f0) / freq_scale:.2f} {freq_unit} | {float(a0):.3f} a.u."
+                                for f0, a0 in annotated
+                            ]
+                            self._place_annotations(env_ax, ann_points, ann_labels, color="#c0392b", text_color="#c0392b")
                     except Exception:
                         pass
                     # Líneas guía teóricas
@@ -8213,7 +8348,7 @@ class MainApp:
 
                     )
 
-                    aux_ax.set_title(f"{cb.label} vs Tiempo")
+                    aux_ax.set_title(f"{cb.label} – evolución temporal")
 
                     aux_ax.legend()
 
